@@ -50,3 +50,6 @@ gate_*.log
 # Internal planning and audit notes — kept local, never published.
 /tasks/
 /GAMECORE_AUDIT_REPORT.md
+
+# Standalone native proof-of-concept build products
+/.build/
