@@ -18,6 +18,10 @@ MAGPIE_API uint32_t magpie_core_abi_version_v1(void);
 MAGPIE_API MagpieStatusV1 magpie_fsr_cpu_process_rgba8_v1(const MagpieRgba8ViewV1*, MagpieRgba8OutputV1*, float sharpness_stops);
 MAGPIE_API MagpieStatusV1 magpie_vulkan_probe_v1(MagpieBackendProbeV1*);
 MAGPIE_API MagpieStatusV1 magpie_gles_probe_v1(MagpieBackendProbeV1*);
+typedef struct MagpieVulkanRuntimeV1 MagpieVulkanRuntimeV1;
+MAGPIE_API MagpieStatusV1 magpie_vulkan_runtime_create_v1(MagpieVulkanRuntimeV1** out_runtime);
+MAGPIE_API MagpieStatusV1 magpie_vulkan_runtime_describe_v1(MagpieVulkanRuntimeV1* runtime, MagpieBackendProbeV1* out);
+MAGPIE_API void magpie_vulkan_runtime_destroy_v1(MagpieVulkanRuntimeV1* runtime);
 #ifdef __cplusplus
 }
 #endif
