@@ -1,6 +1,6 @@
 package com.gamecore.ui.graphics
 
-/** Thin JNI API for in-app test images; it cannot access another app's renderer. */
+/** Thin JNI API for app-owned test images; it cannot access another app's renderer. */
 internal object FsrNative {
     init {
         System.loadLibrary("magpie_core")
@@ -12,4 +12,7 @@ internal object FsrNative {
 
     external fun capabilities(): String
     external fun processCpu(input: android.graphics.Bitmap, output: android.graphics.Bitmap, sharpnessStops: Float): String
+    external fun createVulkanRuntime(): Long
+    external fun describeVulkanRuntime(handle: Long): String
+    external fun destroyVulkanRuntime(handle: Long)
 }
