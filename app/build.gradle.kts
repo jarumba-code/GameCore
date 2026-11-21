@@ -28,6 +28,9 @@ android {
         // native code. Listing the two ARM ABIs keeps the APK from carrying two
         // x86 libraries totalling ~11 MB that no phone will ever load.
         ndk { abiFilters += listOf("arm64-v8a", "armeabi-v7a") }
+        externalNativeBuild {
+            cmake { cppFlags += listOf("-std=c++17") }
+        }
     }
 
     // Optional release signing. `assembleRelease` produces a signed, installable
@@ -70,6 +73,9 @@ android {
         }
     }
 
+    externalNativeBuild {
+        cmake { path = file("src/main/cpp/CMakeLists.txt") }
+    }
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17

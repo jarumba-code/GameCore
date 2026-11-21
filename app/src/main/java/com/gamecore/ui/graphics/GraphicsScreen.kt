@@ -117,6 +117,8 @@ fun GraphicsScreen(
             )
         }
 
+        item { FsrTestImageCard(modifier = padded) }
+
         item {
             NoteBanner(
                 text = "GameCore changes what the display draws, not what a game renders inside itself. " +
