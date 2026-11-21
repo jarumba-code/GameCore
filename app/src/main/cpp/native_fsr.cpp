@@ -70,3 +70,27 @@ Java_com_gamecore_ui_graphics_FsrNative_processCpu(JNIEnv* env, jclass,
                               std::to_string(elapsed) +
                               "; timings include C API and image allocations").c_str());
 }
+
+extern "C" JNIEXPORT jlong JNICALL
+Java_com_gamecore_ui_graphics_FsrNative_createVulkanRuntime(JNIEnv*, jclass) {
+    MagpieVulkanRuntimeV1* runtime = nullptr;
+    if (magpie_vulkan_runtime_create_v1(&runtime) != MAGPIE_OK || !runtime) return 0;
+    return static_cast<jlong>(reinterpret_cast<uintptr_t>(runtime));
+}
+extern "C" JNIEXPORT jstring JNICALL
+Java_com_gamecore_ui_graphics_FsrNative_describeVulkanRuntime(JNIEnv* env, jclass, jlong handle) {
+    auto* runtime = reinterpret_cast<MagpieVulkanRuntimeV1*>(static_cast<uintptr_t>(handle));
+    if (!runtime) return env->NewStringUTF("Vulkan runtime handle is null");
+    MagpieBackendProbeV1 probe{}; probe.struct_size = sizeof(probe);
+    if (magpie_vulkan_runtime_describe_v1(runtime, &probe) != MAGPIE_OK)
+        return env->NewStringUTF("Vulkan runtime description failed");
+    std::string result = probe.device_name;
+    result += " | ";
+    result += probe.reason;
+    return env->NewStringUTF(result.c_str());
+}
+extern "C" JNIEXPORT void JNICALL
+Java_com_gamecore_ui_graphics_FsrNative_destroyVulkanRuntime(JNIEnv*, jclass, jlong handle) {
+    auto* runtime = reinterpret_cast<MagpieVulkanRuntimeV1*>(static_cast<uintptr_t>(handle));
+    magpie_vulkan_runtime_destroy_v1(runtime);
+}
