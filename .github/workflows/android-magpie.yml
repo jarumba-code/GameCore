@@ -65,13 +65,14 @@ jobs:
         shell: bash
         run: |
           set -o pipefail
-          cmake -S tools/fsr1-reference -B "$RUNNER_TEMP/fsr1-reference" \
+          "$ANDROID_SDK_ROOT/cmake/$MAGPIE_CMAKE_VERSION/bin/cmake" \
+            -S tools/fsr1-reference -B "$RUNNER_TEMP/fsr1-reference" \
             -G Ninja -DCMAKE_BUILD_TYPE=Release \
-            -DCMAKE_COMMAND="$ANDROID_SDK_ROOT/cmake/$MAGPIE_CMAKE_VERSION/bin/cmake" \
             2>&1 | tee "$RUNNER_TEMP/android-magpie-fsr-reference-configure.log"
           "$ANDROID_SDK_ROOT/cmake/$MAGPIE_CMAKE_VERSION/bin/cmake" --build "$RUNNER_TEMP/fsr1-reference" \
             2>&1 | tee "$RUNNER_TEMP/android-magpie-fsr-reference-build.log"
-          ctest --test-dir "$RUNNER_TEMP/fsr1-reference" --output-on-failure \
+          "$ANDROID_SDK_ROOT/cmake/$MAGPIE_CMAKE_VERSION/bin/ctest" \
+            --test-dir "$RUNNER_TEMP/fsr1-reference" --output-on-failure \
             2>&1 | tee "$RUNNER_TEMP/android-magpie-fsr-reference-test.log"
 
       - name: Build all JVM tests, Android tests, and debug APK
