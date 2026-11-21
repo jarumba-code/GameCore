@@ -61,6 +61,19 @@ jobs:
         with:
           cache-provider: basic
 
+      - name: Run standalone FSR 1 CPU reference fixtures
+        shell: bash
+        run: |
+          set -o pipefail
+          cmake -S tools/fsr1-reference -B "$RUNNER_TEMP/fsr1-reference" \
+            -G Ninja -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_COMMAND="$ANDROID_SDK_ROOT/cmake/$MAGPIE_CMAKE_VERSION/bin/cmake" \
+            2>&1 | tee "$RUNNER_TEMP/android-magpie-fsr-reference-configure.log"
+          "$ANDROID_SDK_ROOT/cmake/$MAGPIE_CMAKE_VERSION/bin/cmake" --build "$RUNNER_TEMP/fsr1-reference" \
+            2>&1 | tee "$RUNNER_TEMP/android-magpie-fsr-reference-build.log"
+          ctest --test-dir "$RUNNER_TEMP/fsr1-reference" --output-on-failure \
+            2>&1 | tee "$RUNNER_TEMP/android-magpie-fsr-reference-test.log"
+
       - name: Build all JVM tests, Android tests, and debug APK
         id: gradle-build
         shell: bash
@@ -150,7 +163,7 @@ jobs:
         shell: bash
         run: |
           mkdir -p ci-diagnostics
-          for log in android-magpie-gradle-build.log android-magpie-instrumented-tests.log; do
+          for log in android-magpie-gradle-build.log android-magpie-instrumented-tests.log android-magpie-fsr-reference-configure.log android-magpie-fsr-reference-build.log android-magpie-fsr-reference-test.log; do
             if [ -f "$RUNNER_TEMP/$log" ]; then cp "$RUNNER_TEMP/$log" ci-diagnostics/; fi
           done
           for path in app/build/reports app/build/test-results app/build/outputs/logs app/.cxx; do

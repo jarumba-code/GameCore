@@ -21,7 +21,15 @@ The NDK version is a CI pin, not a Gradle `ndkVersion` declaration. The codebase
 
 ## Build and test tasks
 
-The workflow runs:
+The workflow first runs the existing standalone CPU reference fixture suite with the pinned Android SDK CMake version and Ninja:
+
+```sh
+cmake -S tools/fsr1-reference -B "$RUNNER_TEMP/fsr1-reference" -G Ninja -DCMAKE_BUILD_TYPE=Release
+cmake --build "$RUNNER_TEMP/fsr1-reference"
+ctest --test-dir "$RUNNER_TEMP/fsr1-reference" --output-on-failure
+```
+
+It then runs these Gradle tasks:
 
 ```sh
 ./gradlew --no-daemon --stacktrace --console=plain \
