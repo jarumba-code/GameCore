@@ -39,3 +39,13 @@ Standalone target-device validation remains available as documented in `tools/fs
 ```
 
 These commands have not passed in this environment and are not verification claims.
+
+## Environment recheck and SDK architecture review
+
+After the original M3 status, Gradle's `--info` trace successfully resolved AGP 8.5.2 and downloaded its plugin dependencies; the failure was cold/incomplete dependency resolution followed by the definite missing-SDK-path failure. The Android command-line package, platform API 35, and Build Tools 35.0.0 have since been installed locally under `$HOME/Android/Sdk`. This ARM64 host cannot execute the downloaded Linux x86-64 `aapt2`, `zipalign`, or `adb`; AGP also requested desktop-host NDK r26.1.10909125. This does not establish an Android APK build path.
+
+The companion/capture/developer integration separation and native SDK proposal are in [ANDROID_MAGPIE_NATIVE_SDK_ARCHITECTURE.md](ANDROID_MAGPIE_NATIVE_SDK_ARCHITECTURE.md). An isolated arm64 shared-library proof is in `native-sdk/proof`; it does not change this M3 CPU-only JNI state or claim FSR GPU dispatch.
+
+## Native SDK proof addendum (2026-11-21)
+
+The separate `native-sdk/proof` experiment now produces `libmagpie_core.so`, `libmagpie_fsr.so`, `libmagpie_vulkan.so` and `libmagpie_gles.so` as AArch64 Android ELF on the Redmi A5 Termux host. Its smoke test loads them, invokes CPU EASU+RCAS, probes Vulkan compute/RGBA8 support and creates a GLES 3.1 context; CTest passed 1/1. Both GPU libraries report `fsr_dispatch_validated=0`. This is not the production Vulkan engine, app packaging or M3 completion. See [native SDK architecture proposal](ANDROID_MAGPIE_NATIVE_SDK_ARCHITECTURE.md) and [build proof](../native-sdk/proof/README.md).
