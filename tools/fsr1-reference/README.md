@@ -16,3 +16,7 @@ Inputs are deterministic 160×90 PPM images. Each is upscaled to its 320×180 an
 The code ports the EASU and RCAS equations into separate scalar C++ passes using normalized RGB values in the caller's existing color space. It uses ordinary floating-point arithmetic rather than the GPU-specific approximation intrinsics in the upstream shader. It clamps sampling at image edges. RCAS denoise is off, matching the upstream default permutation. This is a correctness/reference and CPU fallback path, not the production GPU implementation.
 
 Output quality and timing are synthetic fixture results. The timing is on the current Redmi A5 CPU, in one Release build, with 3 warmup iterations and 16 measured iterations per pass. It is not GPU timing, game-frame timing, or a claim of real-time performance.
+
+## On-device Vulkan and GLES capability tests (M2)
+
+The CPU build above remains unchanged and does not require Android graphics APIs. To run the separate device path on the Redmi A5, see [M2 build instructions](../../docs/ANDROID_MAGPIE_M2_BUILD.md). The C++ Vulkan harness executes the pinned AMD EASU and RCAS shaders on the GPU, while the GLES probe checks runtime support and shader compilation without claiming a GLES FSR dispatch. Results and limits are in the [device report](../../docs/ANDROID_MAGPIE_M2_DEVICE_CAPABILITIES.md) and [benchmark report](../../docs/ANDROID_MAGPIE_M2_BENCHMARK.md).

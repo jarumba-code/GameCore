@@ -1,0 +1,25 @@
+#version 450
+// AMD FidelityFX FSR 1.0.2 routines, pinned at a21ffb8f6c13233ba336352bdff293894c706575.
+// Copyright (c) 2021 Advanced Micro Devices, Inc. See third_party/amd-fsr1/LICENSE.txt.
+#define A_GPU 1
+#define A_GLSL 1
+#define FSR_EASU_F 1
+#include "ffx_a.h"
+#include "ffx_fsr1.h"
+
+layout(local_size_x=8, local_size_y=8, local_size_z=1) in;
+layout(set=0,binding=0) uniform sampler2D srcImage;
+layout(rgba8,set=0,binding=1) uniform writeonly image2D dstImage;
+layout(push_constant) uniform Params { uvec4 con0; uvec4 con1; uvec4 con2; uvec4 con3; uvec2 outputSize; } pc;
+
+AF4 FsrEasuRF(AF2 p) { return textureGather(srcImage, p, 0); }
+AF4 FsrEasuGF(AF2 p) { return textureGather(srcImage, p, 1); }
+AF4 FsrEasuBF(AF2 p) { return textureGather(srcImage, p, 2); }
+
+void main() {
+    uvec2 p = gl_GlobalInvocationID.xy;
+    if (any(greaterThanEqual(p, pc.outputSize))) return;
+    AF3 rgb;
+    FsrEasuF(rgb, p, pc.con0, pc.con1, pc.con2, pc.con3);
+    imageStore(dstImage, ivec2(p), vec4(rgb, 1.0));
+}
