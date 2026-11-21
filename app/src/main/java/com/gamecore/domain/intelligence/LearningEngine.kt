@@ -82,18 +82,25 @@ object LearningEngine {
      * path so records from different games and goals are never mixed.
      */
     fun summarize(records: List<LearningRecord>, actionKey: String): LearningSummary =
-        summarizeContext(records, actionKey, gamePackage = null, goal = null)
+        summarizeContext(
+            records = records,
+            actionKey = actionKey,
+            gamePackage = null,
+            goal = null,
+            filterContext = false,
+        )
 
     private fun summarizeContext(
         records: List<LearningRecord>,
         actionKey: String,
         gamePackage: String?,
         goal: OptimizationGoal?,
+        filterContext: Boolean = true,
     ): LearningSummary {
         val mine = records.filter {
             it.actionKey == actionKey &&
-                it.gamePackage == gamePackage &&
-                (goal == null || it.goal == goal)
+                (!filterContext || it.gamePackage == gamePackage) &&
+                (!filterContext || goal == null || it.goal == goal)
         }
         val generated = mine.count { it.decision == LearningDecision.GENERATED }
         val applied = mine.count { it.decision == LearningDecision.APPLIED }
