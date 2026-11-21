@@ -28,9 +28,6 @@ android {
         // native code. Listing the two ARM ABIs keeps the APK from carrying two
         // x86 libraries totalling ~11 MB that no phone will ever load.
         ndk { abiFilters += listOf("arm64-v8a", "armeabi-v7a") }
-        externalNativeBuild {
-            cmake { cppFlags += listOf("-std=c++17") }
-        }
     }
 
     // Optional release signing. `assembleRelease` produces a signed, installable
@@ -73,9 +70,8 @@ android {
         }
     }
 
-    externalNativeBuild {
-        cmake { path = file("src/main/cpp/CMakeLists.txt") }
-    }
+    sourceSets.getByName("main").jniLibs.srcDir(layout.buildDirectory.dir("generated/magpie/jniLibs"))
+
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
@@ -108,6 +104,21 @@ android {
         abortOnError = false
     }
 }
+
+val buildMagpieNativeArm64 = tasks.register<Exec>("buildMagpieNativeArm64") {
+    val output = layout.buildDirectory.dir("generated/magpie/jniLibs/arm64-v8a")
+    inputs.dir("src/main/cpp")
+    inputs.dir("../native-sdk/proof")
+    inputs.dir("../graphics/fsr1/src")
+    outputs.dir(output)
+    val outputPath = output.get().asFile.absolutePath
+    if (System.getProperty("os.name").startsWith("Windows", ignoreCase = true)) {
+        commandLine("cmd", "/c", "${rootProject.projectDir}\\tools\\build-magpie-native-android.bat", outputPath)
+    } else {
+        commandLine("sh", "${rootProject.projectDir}/tools/build-magpie-native-android.sh", outputPath)
+    }
+}
+tasks.named("preBuild").configure { dependsOn(buildMagpieNativeArm64) }
 
 dependencies {
     val composeBom = platform(libs.compose.bom)

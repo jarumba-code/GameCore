@@ -1,10 +1,15 @@
 package com.gamecore.ui.graphics
 
-import android.graphics.Bitmap
-
-/** Thin JNI API. Vulkan/GLES are deliberately reported unavailable until app dispatch is validated. */
+/** Thin JNI API for in-app test images; it cannot access another app's renderer. */
 internal object FsrNative {
-    init { System.loadLibrary("magpie_graphics") }
+    init {
+        System.loadLibrary("magpie_core")
+        System.loadLibrary("magpie_fsr")
+        System.loadLibrary("magpie_vulkan")
+        System.loadLibrary("magpie_gles")
+        System.loadLibrary("magpie_android_jni")
+    }
+
     external fun capabilities(): String
-    external fun processCpu(input: Bitmap, output: Bitmap, sharpnessStops: Float): String
+    external fun processCpu(input: android.graphics.Bitmap, output: android.graphics.Bitmap, sharpnessStops: Float): String
 }

@@ -1,0 +1,182 @@
+name: Android Magpie Android build
+
+on:
+  push:
+    branches: [feature/android-magpie]
+  pull_request:
+    branches: [feature/android-magpie]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: android-magpie-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  android:
+    name: Build, test, and package (API 35 / arm64-v8a)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    env:
+      MAGPIE_NDK_VERSION: 26.1.10909125
+      MAGPIE_CMAKE_VERSION: 3.22.1
+
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v7
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v6
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Set up Android SDK and pinned native tools
+        uses: android-actions/setup-android@v4
+        with:
+          packages: >-
+            platform-tools
+            platforms;android-34
+            build-tools;34.0.0
+            ndk;26.1.10909125
+            cmake;3.22.1
+            emulator
+            system-images;android-35;google_apis;arm64-v8a
+
+      - name: Export pinned NDK path
+        run: |
+          SDK_ROOT="${ANDROID_SDK_ROOT:-${ANDROID_HOME:-}}"
+          test -n "$SDK_ROOT"
+          echo "ANDROID_SDK_ROOT=$SDK_ROOT" >> "$GITHUB_ENV"
+          echo "ANDROID_NDK_HOME=$SDK_ROOT/ndk/$MAGPIE_NDK_VERSION" >> "$GITHUB_ENV"
+          echo "ANDROID_NDK_ROOT=$SDK_ROOT/ndk/$MAGPIE_NDK_VERSION" >> "$GITHUB_ENV"
+          test -f "$SDK_ROOT/ndk/$MAGPIE_NDK_VERSION/build/cmake/android.toolchain.cmake"
+          "$SDK_ROOT/cmake/$MAGPIE_CMAKE_VERSION/bin/cmake" --version
+          "$SDK_ROOT/ndk/$MAGPIE_NDK_VERSION/toolchains/llvm/prebuilt/linux-x86_64/bin/clang++" --version
+
+      - name: Set up Gradle and dependency cache
+        uses: gradle/actions/setup-gradle@v6
+        with:
+          cache-provider: basic
+
+      - name: Build all JVM tests, Android tests, and debug APK
+        id: gradle-build
+        shell: bash
+        run: |
+          set -o pipefail
+          ./gradlew --no-daemon --stacktrace --console=plain \
+            :app:testDebugUnitTest \
+            :plugin-studio:testDebugUnitTest \
+            :plugin-maker:testDebugUnitTest \
+            :gamecore-plugin-sdk:test \
+            :app:assembleDebug \
+            :app:assembleDebugAndroidTest \
+            2>&1 | tee "$RUNNER_TEMP/android-magpie-gradle-build.log"
+
+      - name: Verify native library outputs and APK packaging
+        id: package-check
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import pathlib
+          import struct
+          import zipfile
+
+          root = pathlib.Path("app/build")
+          generated = root / "generated/magpie/jniLibs/arm64-v8a"
+          apk = root / "outputs/apk/debug/app-debug.apk"
+          names = (
+              "libmagpie_core.so",
+              "libmagpie_fsr.so",
+              "libmagpie_vulkan.so",
+              "libmagpie_gles.so",
+              "libmagpie_android_jni.so",
+              "libc++_shared.so",
+          )
+          for name in names:
+              path = generated / name
+              data = path.read_bytes()
+              if data[:4] != b"\x7fELF" or data[4] != 2 or data[5] != 1:
+                  raise SystemExit(f"{path}: expected little-endian ELF64")
+              machine = struct.unpack_from("<H", data, 18)[0]
+              if machine != 183:
+                  raise SystemExit(f"{path}: expected AArch64 (183), got {machine}")
+              print(f"Generated AArch64 ELF64: {path}")
+
+          if not apk.is_file():
+              raise SystemExit(f"APK is missing: {apk}")
+          with zipfile.ZipFile(apk) as archive:
+              entries = set(archive.namelist())
+              for name in names:
+                  entry = f"lib/arm64-v8a/{name}"
+                  if entry not in entries:
+                      raise SystemExit(f"APK missing {entry}")
+                  data = archive.read(entry)
+                  if data[:4] != b"\x7fELF" or data[4] != 2 or data[5] != 1:
+                      raise SystemExit(f"APK entry {entry} is not ELF64")
+                  machine = struct.unpack_from("<H", data, 18)[0]
+                  if machine != 183:
+                      raise SystemExit(f"APK entry {entry} is not AArch64 (e_machine={machine})")
+                  print(f"APK contains AArch64 library: {entry} ({len(data)} bytes)")
+          print(f"APK: {apk} ({apk.stat().st_size} bytes)")
+          PY
+
+          AAPT="$ANDROID_SDK_ROOT/build-tools/34.0.0/aapt"
+          PACKAGE="$($AAPT dump badging app/build/outputs/apk/debug/app-debug.apk | sed -n "s/^package: name='\([^']*\)'.*/\1/p")"
+          test "$PACKAGE" = "com.gamecore.debug"
+          echo "Verified debug application ID: $PACKAGE"
+
+      - name: Run Android 15 ARM64 instrumentation tests
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 35
+          target: google_apis
+          arch: arm64-v8a
+          profile: pixel_2
+          emulator-options: -no-window -no-audio -no-boot-anim -no-snapshot -gpu swiftshader_indirect
+          disable-animations: true
+          emulator-boot-timeout: 900
+          script: |
+            set -o pipefail
+            adb shell getprop ro.build.version.sdk
+            adb shell getprop ro.product.cpu.abi
+            ./gradlew --no-daemon --stacktrace --console=plain :app:connectedDebugAndroidTest 2>&1 | tee "$RUNNER_TEMP/android-magpie-instrumented-tests.log"
+
+      - name: Collect build and test diagnostics
+        if: always()
+        shell: bash
+        run: |
+          mkdir -p ci-diagnostics
+          for log in android-magpie-gradle-build.log android-magpie-instrumented-tests.log; do
+            if [ -f "$RUNNER_TEMP/$log" ]; then cp "$RUNNER_TEMP/$log" ci-diagnostics/; fi
+          done
+          for path in app/build/reports app/build/test-results app/build/outputs/logs app/.cxx; do
+            if [ -e "$path" ]; then mkdir -p "ci-diagnostics/$(dirname "$path")"; cp -R "$path" "ci-diagnostics/$(dirname "$path")/"; fi
+          done
+          {
+            echo "commit=$(git rev-parse HEAD)"
+            echo "branch=${GITHUB_REF_NAME}"
+            java -version 2>&1
+            ./gradlew --version 2>&1
+          } > ci-diagnostics/build-environment.txt
+
+      - name: Upload debug APK artifact
+        if: always() && steps.package-check.outcome == 'success'
+        uses: actions/upload-artifact@v7
+        with:
+          name: android-magpie-debug-apk-${{ github.sha }}
+          path: app/build/outputs/apk/debug/app-debug.apk
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Upload build and test logs
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: android-magpie-build-diagnostics-${{ github.sha }}
+          path: ci-diagnostics/
+          if-no-files-found: warn
+          retention-days: 14
