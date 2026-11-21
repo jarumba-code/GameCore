@@ -35,6 +35,24 @@ class FsrNativeInstrumentedTest {
     }
 
     @Test
+    fun vulkanRuntimeCanBeCreatedDescribedAndDestroyedRepeatedly() {
+        repeat(3) {
+            val handle = FsrNative.createVulkanRuntime()
+            if (handle == 0L) {
+                assertTrue(FsrNative.capabilities().contains("runtime=unavailable"))
+                return
+            }
+            try {
+                val description = FsrNative.describeVulkanRuntime(handle)
+                assertTrue(description, description.contains("command buffer") &&
+                    description.contains("FSR dispatch not yet validated"))
+            } finally {
+                FsrNative.destroyVulkanRuntime(handle)
+            }
+        }
+    }
+
+    @Test
     fun capabilityReportDoesNotConfuseProbeWithFsrDispatch() {
         val report = FsrNative.capabilities()
         assertTrue(report, report.contains("Vulkan") && report.contains("fsr_dispatch=not-validated"))
