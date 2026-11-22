@@ -51,8 +51,14 @@ endfunction()
 set(MAGPIE_TEST_SHADER_NAMES "")
 # Test app graphics shaders (vert + frag), compiled and embedded as magpie_test::kVertSpv/kFragSpv.
 foreach(entry IN ITEMS "test.vert:test_vert" "test.frag:test_frag")
-    list(GET entry 0 src)
-    list(GET entry 1 base)
+    # CMake does not split colon-delimited strings into list elements automatically.
+    string(REPLACE ":" ";" entry_parts "${entry}")
+    list(LENGTH entry_parts entry_part_count)
+    if(NOT entry_part_count EQUAL 2)
+        message(FATAL_ERROR "Invalid test shader entry '${entry}'; expected source:basename")
+    endif()
+    list(GET entry_parts 0 src)
+    list(GET entry_parts 1 base)
     add_custom_command(
         OUTPUT ${MAGPIE_SHADER_DIR}/${base}.spv
         COMMAND ${MAGPIE_SHADER_EXE} ${MAGPIE_SHADER_ARGS}
