@@ -11,6 +11,7 @@ import com.gamecore.data.database.DashboardDao
 import com.gamecore.data.database.GameCoreDatabase
 import com.gamecore.data.database.GameCoreMigrations
 import com.gamecore.data.database.GameProfileDao
+import com.gamecore.data.database.GameScalingProfileDao
 import com.gamecore.data.database.HudLayoutDao
 import com.gamecore.data.database.PluginAutomationEventDao
 import com.gamecore.data.database.RestorePointDao
@@ -82,6 +83,10 @@ object DatabaseModule {
 
     @Provides
     fun gameProfileDao(database: GameCoreDatabase): GameProfileDao = database.gameProfiles()
+
+    @Provides
+    fun gameScalingProfileDao(database: GameCoreDatabase): GameScalingProfileDao =
+        database.gameScalingProfiles()
 
     @Provides
     fun hudLayoutDao(database: GameCoreDatabase): HudLayoutDao = database.hudLayouts()

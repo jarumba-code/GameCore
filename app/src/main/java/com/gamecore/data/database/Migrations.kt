@@ -967,6 +967,28 @@ internal object GameCoreMigrations {
         }
     }
 
+    /**
+     * **Version 24 → 25**: adds `game_scaling_profiles`, the per-game Android Game Mode backbuffer
+     * scaling table. Strictly additive — a new table, no existing table or row touched — so
+     * updating from 24 keeps every session, profile, controller result and learning record. The
+     * column names and types match [GameScalingProfileEntity] exactly, so Room's schema validation
+     * against `25.json` sees the migrated shape as the declared one.
+     */
+    val MIGRATION_24_25 = object : Migration(24, 25) {
+        override fun migrate(db: SupportSQLiteDatabase) {
+            db.execSQL(
+                "CREATE TABLE IF NOT EXISTS `game_scaling_profiles` (" +
+                    "`packageName` TEXT NOT NULL, " +
+                    "`ratio` REAL NOT NULL, " +
+                    "`updatedAt` INTEGER NOT NULL, " +
+                    "`priorIntervention` TEXT, " +
+                    "`lastVerdict` TEXT, " +
+                    "`lastBuffers` TEXT, " +
+                    "PRIMARY KEY(`packageName`))",
+            )
+        }
+    }
+
     /** Every migration, in order, for [androidx.room.RoomDatabase.Builder.addMigrations]. */
     val ALL: Array<Migration> = arrayOf(
         MIGRATION_1_2,
@@ -992,5 +1014,6 @@ internal object GameCoreMigrations {
         MIGRATION_21_22,
         MIGRATION_22_23,
         MIGRATION_23_24,
+        MIGRATION_24_25,
     )
 }

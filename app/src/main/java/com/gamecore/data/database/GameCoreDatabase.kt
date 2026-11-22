@@ -76,6 +76,14 @@ import androidx.room.RoomDatabase
  * learning log after the fact. Existing rows stay NULL and remain readable but unattributed.
  * [GameCoreMigrations.MIGRATION_23_24].
  *
+ * **Version 25** adds `game_scaling_profiles`, one new table for the per-game Android Game Mode
+ * backbuffer scaling feature. Strictly additive: no existing table or row is touched. One row per
+ * game, holding the applied ratio, the intervention config the device held before GameCore's first
+ * write (the preservation record), and the latest measured buffer verdict — the evidence the
+ * feature reports instead of a command exit code. It is deliberately not a column on
+ * `game_profiles`: the scaling state has its own lifecycle and its own restore record, and the
+ * profile import/export codec should not have to learn it. [GameCoreMigrations.MIGRATION_24_25].
+ *
  * There are no `@TypeConverter`s registered anywhere in this class, deliberately. Enums are stored
  * as their names and parsed back defensively in [Mappers]; a converter would move that parsing
  * into generated code where the fallback for an unrecognised name is a thrown exception rather
@@ -107,13 +115,16 @@ import androidx.room.RoomDatabase
         RomEntity::class,
         SmartBenchmarkEntity::class,
         SmartLearningRecordEntity::class,
+        GameScalingProfileEntity::class,
     ],
-    version = 24,
+    version = 25,
     exportSchema = true,
 )
 abstract class GameCoreDatabase : RoomDatabase() {
 
     abstract fun gameProfiles(): GameProfileDao
+
+    abstract fun gameScalingProfiles(): GameScalingProfileDao
 
     abstract fun hudLayouts(): HudLayoutDao
 

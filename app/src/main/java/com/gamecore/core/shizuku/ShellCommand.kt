@@ -915,6 +915,164 @@ sealed class ShellCommand(
         }
     }
 
+    // ------------------------------------------- Android Game Mode interventions
+
+    /**
+     * The Game Manager shell interface's own help text, which is this feature's contract.
+     *
+     * Game Mode interventions are an OEM-shipped capability, not an API level: AOSP documents the
+     * mechanism, and an individual build answers for what its `cmd game` actually accepts. Reading
+     * the help and checking it names `list-modes` and `--downscale` is the support check, in the
+     * same spirit as [Probe] — a capability asked of the device, never assumed of the platform.
+     */
+    data object GameModeHelp : ShellCommand(
+        listOf("cmd", "game", "help"), "Read the Game Manager shell interface", Effect.READ_ONLY,
+    )
+
+    /** Reads one game's selected and available Game Modes. */
+    class GameModeListModes private constructor(val packageName: String) : ShellCommand(
+        listOf("cmd", "game", "list-modes", packageName),
+        "Read the game modes of $packageName",
+        Effect.READ_ONLY,
+    ) {
+        companion object {
+            fun of(packageName: String): GameModeListModes? =
+                TextSanitizer.validatePackageName(packageName)?.let { GameModeListModes(it) }
+        }
+    }
+
+    /** Reads the intervention configs registered for one game, if any. */
+    class GameModeListConfigs private constructor(val packageName: String) : ShellCommand(
+        listOf("cmd", "game", "list-configs", packageName),
+        "Read the Game Mode interventions of $packageName",
+        Effect.READ_ONLY,
+    ) {
+        companion object {
+            fun of(packageName: String): GameModeListConfigs? =
+                TextSanitizer.validatePackageName(packageName)?.let { GameModeListConfigs(it) }
+        }
+    }
+
+    /**
+     * Registers one game's WindowManager backbuffer-resize intervention at [ratio].
+     *
+     * This is Android's per-game downscaling intervention — Game Manager custom mode — and it is
+     * not the global `wm size` lever, which [SetDisplaySize] already carries: the resize targets
+     * one package's window buffers, leaves every other app and the display itself untouched, and
+     * takes effect the next time that game's windows are created, which is why the feature pairs
+     * this command with a restart the user performs and a measurement that confirms it.
+     *
+     * The ratio is bounded to the range Android's own help documents (0.3–0.9). The shell accepts
+     * any float — verified against AOSP `GameManagerShellCommand`, which only `Float.parseFloat`s
+     * the argument — but GameCore offers no value outside the documented set, because the docs also
+     * carry the quality caveat that resizes below 0.70 may misrender child processes such as toasts.
+     * [com.gamecore.core.model.GameModeScale] is the only source of ratios here.
+     *
+     * The write lands in GameManagerService's own store and outlives this process; it is recorded
+     * by the scaling controller beforehand, and `cmd game reset` ([GameModeResetOverrides]) is its
+     * undo. The OEM's `device_config game_overlay` values are deliberately unreachable: GameCore
+     * never writes that namespace, and the absence of a command that could is the guarantee.
+     */
+    class GameModeSetDownscale private constructor(
+        val packageName: String,
+        val ratio: Float,
+    ) : ShellCommand(
+        listOf("cmd", "game", "set", "--downscale", formatRatio(ratio), packageName),
+        "Set the Game Mode backbuffer scale of $packageName to ${formatRatio(ratio)}",
+        Effect.CHANGES_SETTING,
+    ) {
+        companion object {
+            fun of(packageName: String, ratio: Float): GameModeSetDownscale? {
+                val valid = TextSanitizer.validatePackageName(packageName) ?: return null
+                if (!ratio.isFinite()) return null
+                if (ratio < MIN_DOWNSCALE_RATIO || ratio > MAX_DOWNSCALE_RATIO) return null
+                return GameModeSetDownscale(valid, ratio)
+            }
+        }
+    }
+
+    /**
+     * Switches one game to standard mode, the platform's default. The explicit off-switch for the
+     * mode itself; [GameModeResetOverrides] removes the intervention config that a `set` wrote.
+     */
+    class GameModeSetStandardMode private constructor(val packageName: String) : ShellCommand(
+        listOf("cmd", "game", "mode", "standard", packageName),
+        "Switch $packageName to standard Game Mode",
+        Effect.CHANGES_SETTING,
+    ) {
+        companion object {
+            fun of(packageName: String): GameModeSetStandardMode? =
+                TextSanitizer.validatePackageName(packageName)?.let { GameModeSetStandardMode(it) }
+        }
+    }
+
+    /**
+     * Removes any intervention config GameCore (or anything else) registered for one game, in the
+     * same spirit as [ResetDisplaySize]: back to the device's own configuration, not to a value
+     * that merely equals it.
+     */
+    class GameModeResetOverrides private constructor(val packageName: String) : ShellCommand(
+        listOf("cmd", "game", "reset", packageName),
+        "Reset the Game Mode interventions of $packageName",
+        Effect.CHANGES_SETTING,
+    ) {
+        companion object {
+            fun of(packageName: String): GameModeResetOverrides? =
+                TextSanitizer.validatePackageName(packageName)?.let { GameModeResetOverrides(it) }
+        }
+    }
+
+    /** Every compositor layer, by name — the resolver input for the per-layer latency read. */
+    data object SurfaceFlingerLayerList : ShellCommand(
+        listOf("dumpsys", "SurfaceFlinger", "--list"),
+        "List SurfaceFlinger layers",
+        Effect.READ_ONLY,
+    )
+
+    /**
+     * Frame-present timing for one game's own surface, named by layer.
+     *
+     * The whole-device `--latency` dump ([SurfaceFlingerLatency]) cannot be attributed to a
+     * package, which is why [com.gamecore.core.system.FrameRateProbe] refuses it for games. Naming
+     * the layer solves that: a `SurfaceView[<package>/...](BLAST)#<id>` name arrives from
+     * [com.gamecore.core.system.SfDumpParsers.blastLayerNameFor] and is bound to the requested
+     * package again here, so the timestamps this returns are the named game's own. Measured on the
+     * reference device: the named layer reports the game's paced cadence while `gfxinfo` reports
+     * five UI frames for the same game.
+     *
+     * The layer name is not accepted as a string from callers. It is re-derived against the
+     * package grammar and the `SurfaceView[<pkg>/...](BLAST)#<digits>` shape in
+     * [gameModeLayerNameOrNull], so a name that does not belong to [packageName] is a refused
+     * command rather than a read of someone else's surface.
+     */
+    class SurfaceFlingerLayerLatency private constructor(
+        val packageName: String,
+        val layerName: String,
+    ) : ShellCommand(
+        listOf("dumpsys", "SurfaceFlinger", "--latency", layerName),
+        "Read the frame timing of $packageName's surface",
+        Effect.READ_ONLY,
+    ) {
+        companion object {
+            fun of(packageName: String, layerName: String): SurfaceFlingerLayerLatency? {
+                val valid = TextSanitizer.validatePackageName(packageName) ?: return null
+                val name = gameModeLayerNameOrNull(valid, layerName) ?: return null
+                return SurfaceFlingerLayerLatency(valid, name)
+            }
+        }
+    }
+
+    /**
+     * The compositor's full state, including every gralloc allocation with its `w/h:` dimensions —
+     * the buffer measurement that decides whether an intervention actually resized a game. Slow on
+     * some devices; run with [ElevatedShell.LONG_TIMEOUT].
+     */
+    data object SurfaceFlingerDump : ShellCommand(
+        listOf("dumpsys", "SurfaceFlinger"),
+        "Read SurfaceFlinger state and buffer dimensions",
+        Effect.READ_ONLY,
+    )
+
     /**
      * The call-site surface.
      *
@@ -1040,6 +1198,32 @@ sealed class ShellCommand(
          */
         fun configFilePath(packageName: String, userId: Int, relativePath: String = ""): String? =
             externalFilesPath(packageName, userId, relativePath)
+
+        // ---- Android Game Mode + SurfaceFlinger verification (see the command docs above) ----
+
+        fun gameModeHelp(): GameModeHelp = GameModeHelp
+
+        fun gameModeListModes(packageName: String): GameModeListModes? =
+            GameModeListModes.of(packageName)
+
+        fun gameModeListConfigs(packageName: String): GameModeListConfigs? =
+            GameModeListConfigs.of(packageName)
+
+        fun gameModeSetDownscale(packageName: String, ratio: Float): GameModeSetDownscale? =
+            GameModeSetDownscale.of(packageName, ratio)
+
+        fun gameModeSetStandardMode(packageName: String): GameModeSetStandardMode? =
+            GameModeSetStandardMode.of(packageName)
+
+        fun gameModeResetOverrides(packageName: String): GameModeResetOverrides? =
+            GameModeResetOverrides.of(packageName)
+
+        fun surfaceFlingerLayerList(): SurfaceFlingerLayerList = SurfaceFlingerLayerList
+
+        fun surfaceFlingerLayerLatency(packageName: String, layerName: String): SurfaceFlingerLayerLatency? =
+            SurfaceFlingerLayerLatency.of(packageName, layerName)
+
+        fun surfaceFlingerDump(): SurfaceFlingerDump = SurfaceFlingerDump
 
         /**
          * Validates a package name. Exposed so a caller that has to decide whether a
@@ -1203,6 +1387,51 @@ private const val MAX_SEGMENT_LENGTH = 255
 
 /** A generous cap on the whole built path, well under a filesystem's `PATH_MAX`. */
 private const val MAX_CONFIG_PATH_LENGTH = 4096
+
+/**
+ * A Game Mode intervention scale, or null if [ratio] is not one. The range is the one Android's
+ * own help documents — 0.3 to 0.9 — and it is a closed bound, not a "looks numeric" check: a
+ * ratio outside it is a refused command, whatever the shell would have done with it.
+ */
+private const val MIN_DOWNSCALE_RATIO = 0.30f
+private const val MAX_DOWNSCALE_RATIO = 0.90f
+
+/**
+ * A scale as the shell expects it: `Locale.US`, two decimals, so a device set to a decimal-comma
+ * locale never writes `0,75` into a config the platform parses with `Float.parseFloat`. The same
+ * discipline as [formatFloat], kept separate because a ratio needs its second decimal — `0.67`
+ * does not survive `%.1f`.
+ */
+private fun formatRatio(ratio: Float): String =
+    String.format(java.util.Locale.US, "%.2f", ratio)
+
+/**
+ * A compositor layer name owned by [packageName]'s own surface, or null if it is not one.
+ *
+ * The shape is exactly what [com.gamecore.core.system.SfDumpParsers.blastLayerNameFor] returns:
+ * `SurfaceView[<package>/<activity>](BLAST)#<id>`. The check re-derives the package rather than
+ * trusting the caller — the name travels from a parser through a controller to here, and the
+ * command it lands in reads frame timing of the surface it names, so the binding between the
+ * command and the package it claims is re-checked at the last step, not assumed at the first.
+ */
+private fun gameModeLayerNameOrNull(packageName: String, layerName: String): String? {
+    val prefix = "SurfaceView[$packageName/"
+    if (!layerName.startsWith(prefix)) return null
+    val close = layerName.indexOf(']')
+    if (close < 0) return null
+    val suffix = layerName.substring(close + 1)
+    if (!BLAST_LAYER_SUFFIX.matches(suffix)) return null
+    // The activity component between the brackets must be a plausible Java class reference.
+    val inner = layerName.substring("SurfaceView[".length, close)
+    val component = inner.substringAfter('/')
+    if (component.isEmpty() || component.contains("..")) return null
+    for (ch in component) {
+        if (!ch.isLetterOrDigit() && ch != '.' && ch != '_' && ch != '$') return null
+    }
+    return layerName
+}
+
+private val BLAST_LAYER_SUFFIX = Regex("""\(BLAST\)#\d{1,10}$""")
 
 /**
  * The three settings tables GameCore touches.

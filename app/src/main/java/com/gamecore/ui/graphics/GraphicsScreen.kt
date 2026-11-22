@@ -117,13 +117,20 @@ fun GraphicsScreen(
             )
         }
 
+        // Per-game Android Game Mode scaling: the one lever here that changes what a game itself
+        // renders into — the platform's own per-package backbuffer resize — measured and reported
+        // rather than assumed. Kept visually and logically separate from the two display levers
+        // above, which it must not be confused with.
+        item { GameModeScalingCard(modifier = padded) }
+
         item { FsrTestImageCard(modifier = padded) }
 
         item {
             NoteBanner(
-                text = "GameCore changes what the display draws, not what a game renders inside itself. " +
-                    "A game's textures, filtering and shaders live in its own renderer and cannot be " +
-                    "replaced or sharpened from outside it — this screen does not pretend to.",
+                text = "The display levers change what the system draws; the per-game card changes " +
+                    "the buffers one game renders into, through Android's own Game Mode " +
+                    "intervention. Neither replaces a game's textures, filtering or shaders — those " +
+                    "live in the game's own renderer and cannot be sharpened from outside it.",
                 tone = Tone.Muted,
                 icon = Icons.Filled.Info,
                 modifier = padded,
