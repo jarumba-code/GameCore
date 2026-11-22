@@ -419,7 +419,7 @@ magpie_CreateInstance(const VkInstanceCreateInfo* pCreateInfo, const VkAllocatio
         chainInfo = static_cast<VkLayerInstanceCreateInfo*>(const_cast<void*>(chainInfo.pNext));
     }
     if (chainInfo) {
-        gpiA_next = chainInfo.u.pLayerInfo->pGetInstanceProcAddr;
+        gpiA_next = chainInfo.u.pLayerInfo->pfnNextGetInstanceProcAddr;
         chainInfo.u.pLayerInfo = chainInfo.u.pLayerInfo->pNext;
     } else {
         LOGE("loader link info missing; layer cannot chain");
@@ -526,8 +526,8 @@ magpie_CreateDevice(VkPhysicalDevice physical, const VkDeviceCreateInfo* pCreate
         chainInfo = static_cast<VkLayerDeviceCreateInfo*>(const_cast<void*>(chainInfo.pNext));
     }
     if (chainInfo) {
-        gpiA_next = chainInfo.u.pLayerInfo->pGetInstanceProcAddr;
-        gdpA_next = chainInfo.u.pLayerInfo->pGetNextDeviceProcAddr;
+        gpiA_next = chainInfo.u.pLayerInfo->pfnNextGetInstanceProcAddr;
+        gdpA_next = chainInfo.u.pLayerInfo->pfnNextGetDeviceProcAddr;
         chainInfo.u.pLayerInfo = chainInfo.u.pLayerInfo->pNext;
     } else {
         LOGE("device loader link info missing");
