@@ -1158,9 +1158,8 @@ magpie_QueuePresentKHR(VkQueue queue, const VkPresentInfoKHR* pPresentInfo) {
         }
         if (index >= sub->imageCount || index >= sub->fake.size() ||
             index >= sub->realImages.size() || index >= sub->presentSems.size()) {
-            LOGE("present image index %u is outside substitution resources; passthrough", index);
-            const auto present = deviceProc<PFN_vkQueuePresentKHR>(d, "vkQueuePresentKHR");
-            return present(queue, pPresentInfo);
+            LOGE("present image index %u is outside substitution resources; refusing unsafe present", index);
+            return VK_ERROR_INITIALIZATION_FAILED;
         }
 
         // Engine failure latched at any earlier point: passthrough with the app's own
@@ -1202,12 +1201,10 @@ magpie_QueuePresentKHR(VkQueue queue, const VkPresentInfoKHR* pPresentInfo) {
         const auto cmdCopyImage = deviceProc<PFN_vkCmdCopyImage>(d, "vkCmdCopyImage");
         const auto cmdBlitImage = deviceProc<PFN_vkCmdBlitImage>(d, "vkCmdBlitImage");
 
-        if (d->pool == VK_NULL_HANDLE && !ensureCommandBuffer(d, queue)) {
-            sub->mode = Mode::PASS;
-            LOGE("layer command buffer unavailable (%s); passthrough from now on",
+        if (!ensureCommandBuffer(d, queue)) {
+            LOGE("layer command buffer unavailable (%s); refusing unsafe present",
                  d->failureReason.c_str());
-            const auto present = deviceProc<PFN_vkQueuePresentKHR>(d, "vkQueuePresentKHR");
-            return present(queue, pPresentInfo);
+            return VK_ERROR_INITIALIZATION_FAILED;
         }
 
         // Read the previous frame's timestamps without blocking (no WAIT bit): timing is
@@ -1236,9 +1233,9 @@ magpie_QueuePresentKHR(VkQueue queue, const VkPresentInfoKHR* pPresentInfo) {
             const VkResult waitResult = waitForFences(d->device, 1, &d->submitFence,
                                                        VK_TRUE, UINT64_MAX);
             if (waitResult != VK_SUCCESS) {
-                LOGE("layer submission fence wait failed (%d); passthrough", (int)waitResult);
-                const auto present = deviceProc<PFN_vkQueuePresentKHR>(d, "vkQueuePresentKHR");
-                return present(queue, pPresentInfo);
+                LOGE("layer submission fence wait failed (%d); refusing unsafe present",
+                     (int)waitResult);
+                return waitResult;
             }
             d->commandPending = false;
         }
@@ -1261,9 +1258,8 @@ magpie_QueuePresentKHR(VkQueue queue, const VkPresentInfoKHR* pPresentInfo) {
         bi.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
         bi.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
         if (begin(d->command, &bi) != VK_SUCCESS) {
-            LOGE("command buffer begin failed; passthrough for this frame");
-            const auto present = deviceProc<PFN_vkQueuePresentKHR>(d, "vkQueuePresentKHR");
-            return present(queue, pPresentInfo);
+            LOGE("command buffer begin failed; refusing unsafe present");
+            return VK_ERROR_INITIALIZATION_FAILED;
         }
 
         if (d->queries != VK_NULL_HANDLE) resetQueryPool(d->command, d->queries, 0, 4);
@@ -1374,9 +1370,8 @@ magpie_QueuePresentKHR(VkQueue queue, const VkPresentInfoKHR* pPresentInfo) {
                       VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT,
                       barrier);
         if (end(d->command, &bi) != VK_SUCCESS) {
-            LOGE("command buffer end failed; passthrough for this frame");
-            const auto present = deviceProc<PFN_vkQueuePresentKHR>(d, "vkQueuePresentKHR");
-            return present(queue, pPresentInfo);
+            LOGE("command buffer end failed; refusing unsafe present");
+            return VK_ERROR_INITIALIZATION_FAILED;
         }
 
         // Semaphore chain: wait the app's render-signal semaphores, signal ours for the present.
@@ -1395,16 +1390,14 @@ magpie_QueuePresentKHR(VkQueue queue, const VkPresentInfoKHR* pPresentInfo) {
         const auto resetFences = deviceProc<PFN_vkResetFences>(d, "vkResetFences");
         const VkResult resetFenceResult = resetFences(d->device, 1, &d->submitFence);
         if (resetFenceResult != VK_SUCCESS) {
-            LOGE("layer submission fence reset failed (%d); passthrough", (int)resetFenceResult);
-            const auto present = deviceProc<PFN_vkQueuePresentKHR>(d, "vkQueuePresentKHR");
-            return present(queue, pPresentInfo);
+            LOGE("layer submission fence reset failed (%d); refusing unsafe present",
+                 (int)resetFenceResult);
+            return resetFenceResult;
         }
         const VkResult submitResult = submit(queue, 1, &si, d->submitFence);
         if (submitResult != VK_SUCCESS) {
-            LOGE("layer submit failed (%d); passthrough with app semaphores", (int)submitResult);
-            sub->mode = sub->mode == Mode::FSR ? Mode::BLIT : sub->mode;
-            const auto present = deviceProc<PFN_vkQueuePresentKHR>(d, "vkQueuePresentKHR");
-            return present(queue, pPresentInfo);
+            LOGE("layer submit failed (%d); refusing unsafe present", (int)submitResult);
+            return submitResult;
         }
         d->commandPending = true;
         sub->timingsValid = sub->mode == Mode::FSR && d->queries != VK_NULL_HANDLE;
