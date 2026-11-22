@@ -38,6 +38,11 @@ struct HostBuffer {
     VkDeviceMemory mem = VK_NULL_HANDLE;
 };
 
+}  // namespace
+
+// The engine struct is defined at global scope, matching magpie.h's forward declaration: an
+// anonymous-namespace definition would be a *different* type from the header's, and the extern
+// "C" functions below would be ambiguous between the two.
 struct MagpieVulkanFsrEngineV1 {
     VkInstance instance = VK_NULL_HANDLE;
     VkPhysicalDevice physical = VK_NULL_HANDLE;
@@ -685,8 +690,6 @@ struct MagpieVulkanFsrEngineV1 {
         device = VK_NULL_HANDLE;
     }
 };
-
-}  // namespace
 
 extern "C" MAGPIE_API MagpieStatusV1 magpie_vulkan_fsr_engine_create_v1(
     MagpieVulkanFsrEngineV1** out, const MagpieVulkanFsrEngineConfigV1* config) {
