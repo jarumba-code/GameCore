@@ -188,6 +188,17 @@ struct Renderer {
             return false;
         }
         vkGetDeviceQueue(device, graphicsFamily, 0, &queue);
+        if (layerEnabled) {
+            using PFN_vkMagpieSetFakeImageFinalLayout =
+                VkResult(VKAPI_PTR*)(VkDevice, VkImageLayout);
+            const auto setFakeLayout = reinterpret_cast<PFN_vkMagpieSetFakeImageFinalLayout>(
+                vkGetDeviceProcAddr(device, "vkMagpieSetFakeImageFinalLayout"));
+            if (!setFakeLayout ||
+                setFakeLayout(device, VK_IMAGE_LAYOUT_GENERAL) != VK_SUCCESS) {
+                LOGE("Magpie layer did not expose its controlled-app image-layout contract");
+                return false;
+            }
+        }
 
         // The critical diagnostic pair: the surface's own extent vs the extent the swapchain
         // images report. With the layer substituted they differ (low-res images on a native
@@ -289,7 +300,8 @@ struct Renderer {
         color.stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
         color.stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
         color.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
-        color.finalLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
+        color.finalLayout = layerEnabled ? VK_IMAGE_LAYOUT_GENERAL
+                                         : VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
         VkAttachmentReference colorRef{0, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL};
         VkSubpassDescription subpass{};
         subpass.pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS;
