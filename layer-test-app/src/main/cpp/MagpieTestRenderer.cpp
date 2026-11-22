@@ -24,8 +24,6 @@
 #include <string>
 #include <thread>
 #include <vector>
-#include <cstdlib>
-#include <sys/system_properties.h>
 
 #define LOGI(...) __android_log_print(ANDROID_LOG_INFO, "MagpieTest", __VA_ARGS__)
 #define LOGE(...) __android_log_print(ANDROID_LOG_ERROR, "MagpieTest", __VA_ARGS__)
@@ -33,24 +31,6 @@
 static const char* MAGPIE_LAYER_NAME = "VK_LAYER_MAGPIE_FSR1";
 
 namespace {
-
-float configuredScale() {
-    char value[PROP_VALUE_MAX] = {0};
-    if (__system_property_get("debug.magpie.scale", value) > 0) {
-        const float parsed = std::strtof(value, nullptr);
-        if (parsed > 0.1f && parsed < 1.0f) return parsed;
-    }
-    return 0.5f;
-}
-
-VkExtent2D renderExtent(VkExtent2D nativeExtent, bool layerEnabled) {
-    if (!layerEnabled) return nativeExtent;
-    const float scale = configuredScale();
-    return {
-        std::max(1u, static_cast<uint32_t>(std::lround(nativeExtent.width * scale))),
-        std::max(1u, static_cast<uint32_t>(std::lround(nativeExtent.height * scale)))
-    };
-}
 
 struct FrameSync {
     VkSemaphore imageAvailable = VK_NULL_HANDLE;
@@ -62,6 +42,7 @@ struct Renderer {
     std::thread thread;
     ANativeWindow* window = nullptr;
     bool layerEnabled = false;
+    bool substituted = false;
 
     VkInstance instance = VK_NULL_HANDLE;
     VkSurfaceKHR surface = VK_NULL_HANDLE;
@@ -211,10 +192,7 @@ struct Renderer {
              caps.currentExtent.width, caps.currentExtent.height,
              caps.minImageExtent.width, caps.minImageExtent.height);
         surfaceExtent = caps.currentExtent;
-        extent = renderExtent(surfaceExtent, layerEnabled);
-        LOGI("renderer extents: surface=%ux%u render=%ux%u layer=%d scale=%.3f",
-             surfaceExtent.width, surfaceExtent.height, extent.width, extent.height,
-             layerEnabled ? 1 : 0, layerEnabled ? configuredScale() : 1.0f);
+        extent = surfaceExtent;
         return createSwapchainObjects() && createRenderPipeline() && createFrameSync();
     }
 
@@ -227,7 +205,8 @@ struct Renderer {
         VkSurfaceCapabilitiesKHR caps{};
         capsFn(physical, surface, &caps);
         surfaceExtent = caps.currentExtent;
-        extent = renderExtent(surfaceExtent, layerEnabled);
+        extent = surfaceExtent;
+        const bool wasSubstituted = substituted;
         VkSwapchainCreateInfoKHR sci{};
         sci.sType = VK_STRUCTURE_TYPE_SWAPCHAIN_CREATE_INFO_KHR;
         sci.surface = surface;
@@ -250,6 +229,28 @@ struct Renderer {
             LOGE("swapchain creation failed");
             return false;
         }
+        substituted = false;
+        extent = surfaceExtent;
+        if (layerEnabled) {
+            using PFN_vkMagpieGetSwapchainRenderExtent =
+                VkResult(VKAPI_PTR*)(VkDevice, VkSwapchainKHR, VkExtent2D*);
+            const auto getRenderExtent = reinterpret_cast<PFN_vkMagpieGetSwapchainRenderExtent>(
+                vkGetDeviceProcAddr(device, "vkMagpieGetSwapchainRenderExtent"));
+            VkExtent2D layerExtent{};
+            if (getRenderExtent &&
+                getRenderExtent(device, swapchain, &layerExtent) == VK_SUCCESS) {
+                extent = layerExtent;
+                substituted = true;
+            }
+        }
+        if (old != VK_NULL_HANDLE && wasSubstituted != substituted) {
+            LOGE("layer substitution mode changed during swapchain recreation; stopping safely");
+            return false;
+        }
+        LOGI("renderer extents: surface=%ux%u render=%ux%u substituted=%d",
+             surfaceExtent.width, surfaceExtent.height, extent.width, extent.height,
+             substituted ? 1 : 0);
+
         if (old != VK_NULL_HANDLE) {
             for (VkFramebuffer fb : framebuffers) vkDestroyFramebuffer(device, fb, nullptr);
             for (VkImageView iv : imageViews) vkDestroyImageView(device, iv, nullptr);
@@ -300,8 +301,8 @@ struct Renderer {
         color.stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
         color.stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
         color.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
-        color.finalLayout = layerEnabled ? VK_IMAGE_LAYOUT_GENERAL
-                                         : VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
+        color.finalLayout = substituted ? VK_IMAGE_LAYOUT_GENERAL
+                                        : VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
         VkAttachmentReference colorRef{0, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL};
         VkSubpassDescription subpass{};
         subpass.pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS;
