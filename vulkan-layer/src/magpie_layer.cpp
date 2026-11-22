@@ -134,6 +134,8 @@ struct DeviceData {
 
 std::mutex g_instanceLock;
 std::unordered_map<VkInstance, PFN_vkGetInstanceProcAddr> g_nextGpiA;
+std::mutex g_physicalInstanceLock;
+std::unordered_map<VkPhysicalDevice, VkInstance> g_physicalInstances;
 std::mutex g_deviceLock;
 std::unordered_map<VkDevice, DeviceData*> g_devices;
 std::mutex g_swapchainOwnerLock;
@@ -151,6 +153,12 @@ PFN_vkGetInstanceProcAddr nextGpiA(VkInstance instance) {
     std::lock_guard<std::mutex> guard(g_instanceLock);
     const auto it = g_nextGpiA.find(instance);
     return it == g_nextGpiA.end() ? nullptr : it->second;
+}
+
+VkInstance instanceForPhysicalDevice(VkPhysicalDevice physical) {
+    std::lock_guard<std::mutex> guard(g_physicalInstanceLock);
+    const auto it = g_physicalInstances.find(physical);
+    return it == g_physicalInstances.end() ? VK_NULL_HANDLE : it->second;
 }
 
 DeviceData* deviceData(VkDevice device) {
@@ -436,11 +444,36 @@ magpie_DestroyInstance(VkInstance instance, const VkAllocationCallbacks* allocat
         std::lock_guard<std::mutex> guard(g_instanceLock);
         g_nextGpiA.erase(instance);
     }
+    {
+        std::lock_guard<std::mutex> guard(g_physicalInstanceLock);
+        for (auto it = g_physicalInstances.begin(); it != g_physicalInstances.end();) {
+            if (it->second == instance) it = g_physicalInstances.erase(it);
+            else ++it;
+        }
+    }
     if (gpiA_next) {
         const auto destroyInstance =
             reinterpret_cast<PFN_vkDestroyInstance>(gpiA_next(instance, "vkDestroyInstance"));
         destroyInstance(instance, allocator);
     }
+}
+
+extern "C" VKAPI_ATTR VkResult VKAPI_CALL
+magpie_EnumeratePhysicalDevices(VkInstance instance, uint32_t* pPhysicalDeviceCount,
+                                VkPhysicalDevice* pPhysicalDevices) {
+    if (!pPhysicalDeviceCount) return VK_ERROR_INITIALIZATION_FAILED;
+    const auto next = nextGpiA(instance);
+    if (!next) return VK_ERROR_INITIALIZATION_FAILED;
+    const auto enumerate = reinterpret_cast<PFN_vkEnumeratePhysicalDevices>(
+        next(instance, "vkEnumeratePhysicalDevices"));
+    if (!enumerate) return VK_ERROR_INITIALIZATION_FAILED;
+    const VkResult result = enumerate(instance, pPhysicalDeviceCount, pPhysicalDevices);
+    if ((result == VK_SUCCESS || result == VK_INCOMPLETE) && pPhysicalDevices) {
+        std::lock_guard<std::mutex> guard(g_physicalInstanceLock);
+        for (uint32_t i = 0; i < *pPhysicalDeviceCount; ++i)
+            g_physicalInstances[pPhysicalDevices[i]] = instance;
+    }
+    return result;
 }
 
 extern "C" VKAPI_ATTR VkResult VKAPI_CALL
@@ -461,6 +494,8 @@ magpie_GetInstanceProcAddr(VkInstance instance, const char* name) {
         return reinterpret_cast<void*>(&magpie_EnumerateDeviceLayerProperties);
     if (strcmp(name, "vkEnumerateDeviceExtensionProperties") == 0)
         return reinterpret_cast<void*>(&magpie_EnumerateDeviceExtensionProperties);
+    if (strcmp(name, "vkEnumeratePhysicalDevices") == 0)
+        return reinterpret_cast<void*>(&magpie_EnumeratePhysicalDevices);
     if (strcmp(name, "vkCreateInstance") == 0)
         return reinterpret_cast<void*>(&magpie_CreateInstance);
     if (strcmp(name, "vkCreateDevice") == 0)
@@ -478,6 +513,11 @@ magpie_GetInstanceProcAddr(VkInstance instance, const char* name) {
 extern "C" VKAPI_ATTR VkResult VKAPI_CALL
 magpie_CreateDevice(VkPhysicalDevice physical, const VkDeviceCreateInfo* pCreateInfo,
                     const VkAllocationCallbacks* pAllocator, VkDevice* pDevice) {
+    const VkInstance instance = instanceForPhysicalDevice(physical);
+    if (instance == VK_NULL_HANDLE) {
+        LOGE("vkCreateDevice received an untracked physical device");
+        return VK_ERROR_INITIALIZATION_FAILED;
+    }
     auto* chainInfo = static_cast<VkLayerDeviceCreateInfo*>(const_cast<void*>(pCreateInfo->pNext));
     PFN_vkGetInstanceProcAddr gpiA_next = nullptr;
     PFN_vkGetDeviceProcAddr gdpA_next = nullptr;
@@ -494,7 +534,8 @@ magpie_CreateDevice(VkPhysicalDevice physical, const VkDeviceCreateInfo* pCreate
         return VK_ERROR_INITIALIZATION_FAILED;
     }
     const auto createDevice =
-        reinterpret_cast<PFN_vkCreateDevice>(gpiA_next(nullptr, "vkCreateDevice"));
+        reinterpret_cast<PFN_vkCreateDevice>(gpiA_next(instance, "vkCreateDevice"));
+    if (!createDevice) return VK_ERROR_INITIALIZATION_FAILED;
     const VkResult result = createDevice(physical, pCreateInfo, pAllocator, pDevice);
     if (result != VK_SUCCESS) return result;
 
@@ -502,9 +543,10 @@ magpie_CreateDevice(VkPhysicalDevice physical, const VkDeviceCreateInfo* pCreate
     data->gdpA_next = gdpA_next;
     data->gpiA_next = gpiA_next;
     data->device = *pDevice;
+    data->instance = instance;
     data->physical = physical;
     const auto props = reinterpret_cast<PFN_vkGetPhysicalDeviceProperties>(
-        gpiA_next(nullptr, "vkGetPhysicalDeviceProperties"));
+        gpiA_next(instance, "vkGetPhysicalDeviceProperties"));
     if (props) {
         VkPhysicalDeviceProperties p{};
         props(physical, &p);
