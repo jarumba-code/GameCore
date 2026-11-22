@@ -57,17 +57,22 @@ foreach(magpie_ndk_root IN ITEMS
     if(magpie_ndk_root)
         list(APPEND MAGPIE_GLSLC_CANDIDATES
             "${magpie_ndk_root}/toolchains/llvm/prebuilt/*/bin/glslc"
-            "${magpie_ndk_root}/toolchains/llvm/prebuilt/*/bin/glslc.exe")
+            "${magpie_ndk_root}/toolchains/llvm/prebuilt/*/bin/glslc.exe"
+            "${magpie_ndk_root}/shader-tools/*/glslc"
+            "${magpie_ndk_root}/shader-tools/*/glslc.exe")
     endif()
 endforeach()
 if(DEFINED ENV{ANDROID_HOME})
     list(APPEND MAGPIE_GLSLC_CANDIDATES
         "$ENV{ANDROID_HOME}/ndk/*/toolchains/llvm/prebuilt/*/bin/glslc"
-        "$ENV{ANDROID_HOME}/ndk/*/toolchains/llvm/prebuilt/*/bin/glslc.exe")
+        "$ENV{ANDROID_HOME}/ndk/*/toolchains/llvm/prebuilt/*/bin/glslc.exe"
+        "$ENV{ANDROID_HOME}/ndk/*/shader-tools/*/glslc"
+        "$ENV{ANDROID_HOME}/ndk/*/shader-tools/*/glslc.exe")
 endif()
 # The GitHub-hosted runner's SDK location, where the workflow installs the NDK.
 list(APPEND MAGPIE_GLSLC_CANDIDATES
-    "/usr/local/lib/android/sdk/ndk/*/toolchains/llvm/prebuilt/*/bin/glslc")
+    "/usr/local/lib/android/sdk/ndk/*/toolchains/llvm/prebuilt/*/bin/glslc"
+    "/usr/local/lib/android/sdk/ndk/*/shader-tools/*/glslc")
 file(GLOB MAGPIE_GLSLC_CANDIDATES ${MAGPIE_GLSLC_CANDIDATES})
 find_program(MAGPIE_GLSLC_EXECUTABLE NAMES glslc HINTS ${MAGPIE_GLSLC_CANDIDATES})
 if(NOT MAGPIE_GLSLC_EXECUTABLE)

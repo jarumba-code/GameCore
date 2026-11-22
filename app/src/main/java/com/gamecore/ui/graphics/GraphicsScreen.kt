@@ -125,6 +125,11 @@ fun GraphicsScreen(
 
         item { FsrTestImageCard(modifier = padded) }
 
+        // The capture-and-sharpen experiment: post-composition capture of the displayed image,
+        // kept deliberately separate from the two levers above and labeled as what it is — an
+        // experiment on the displayed capture, never renderer-integrated FSR.
+        item { FsrCaptureExperimentCard(modifier = padded) }
+
         item {
             NoteBanner(
                 text = "The display levers change what the system draws; the per-game card changes " +
