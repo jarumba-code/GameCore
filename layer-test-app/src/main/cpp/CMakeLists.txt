@@ -6,7 +6,7 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_POSITION_INDEPENDENT_CODE ON)
 
 set(MAGPIE_ROOT ${CMAKE_CURRENT_SOURCE_DIR}/../../../../)
-set(MAGPIE_AMD_ROOT ${MAGPIE_ROOT}/third_party/amd-fsr1)
+set(MAGPIE_AMD_ROOT ${MAGPIE_ROOT}/third_party/amd-fsr1
 
 # GLSL front end: prefer glslc when an NDK ships one (r24-), otherwise glslangValidator
 # (installed by the CI workflow; same Vulkan 1.0 SPIR-V). One shared resolver for all shaders.
@@ -40,18 +40,17 @@ function(magpie_embed_spv spv_file c_name out_header)
     string(LENGTH "${magpie_hex}" magpie_hex_len)
     math(EXPR magpie_len "${magpie_hex_len} / 2")
     file(WRITE "${out_header}"
-"// Generated from ${spv_file}; do not edit.\n"
-"#include <cstdint>\n"
-"namespace ${c_name} {\n"
-"inline const uint32_t blob[] = {\n${magpie_bytes}0u\n};\n"
-"inline const uint32_t blob_word_count = ${magpie_len} / 4u;\n"
-"}  // namespace ${c_name}\n")
+"// Generated from ${spv_file}; do not edit.\\n"
+"#include <cstdint>\\n"
+"namespace ${c_name} {\\n"
+"inline const uint32_t blob[] = {\\n${magpie_bytes}0u\\n};\\n"
+"inline const uint32_t blob_word_count = ${magpie_len} / 4u;\\n"
+"}  // namespace ${c_name}\\n")
 endfunction()
 
 set(MAGPIE_TEST_SHADER_NAMES "")
 # Test app graphics shaders (vert + frag), compiled and embedded as magpie_test::kVertSpv/kFragSpv.
 foreach(entry IN ITEMS "test.vert:test_vert" "test.frag:test_frag")
-    # CMake does not split colon-delimited strings into list elements automatically.
     string(REPLACE ":" ";" entry_parts "${entry}")
     list(LENGTH entry_parts entry_part_count)
     if(NOT entry_part_count EQUAL 2)
@@ -82,8 +81,6 @@ foreach(shader IN ITEMS easu rcas)
     list(APPEND MAGPIE_TEST_SPV ${MAGPIE_SHADER_DIR}/${shader}.spv)
 endforeach()
 
-# Two embedded headers: the renderer's own shaders (namespace magpie_test) and the layer's FSR
-# shaders (namespace magpie_shaders, same names the main app embeds).
 add_custom_command(
     OUTPUT ${MAGPIE_SHADER_DIR}/test_shaders.h
     COMMAND ${CMAKE_COMMAND}
@@ -114,13 +111,9 @@ if(NOT IS_ABSOLUTE "${MAGPIE_VULKAN_LIBRARY}" OR NOT EXISTS "${MAGPIE_VULKAN_LIB
     message(FATAL_ERROR "Android Vulkan link library was not resolved: '${MAGPIE_VULKAN_LIBRARY}'")
 endif()
 
-# THE LAYER. Target name "VkLayer_MagpieFSR" produces libVkLayer_MagpieFSR.so, which the Android
-# loader discovers in the app's own nativeLibraryDir (verified AOSP loader behavior).
 add_library(VkLayer_MagpieFSR SHARED
     ${MAGPIE_ROOT}/vulkan-layer/src/magpie_layer.cpp)
 add_dependencies(VkLayer_MagpieFSR magpie_test_shaders)
-# vk_layer.h is a Vulkan loader interface header, not part of the Android NDK public Vulkan headers.
-# Vendor the pinned Khronos header; vulkan_core.h resolves from the NDK sysroot.
 target_include_directories(VkLayer_MagpieFSR PRIVATE
     ${MAGPIE_SHADER_DIR}
     ${MAGPIE_ROOT}/third_party/Vulkan-Headers/include)
@@ -129,10 +122,12 @@ target_compile_options(VkLayer_MagpieFSR PRIVATE -Wall -Wextra)
 
 # The controlled test application's renderer.
 find_library(MAGPIE_ANDROID_LIBRARY NAMES android REQUIRED)
+find_library(MAGPIE_LOG_LIBRARY NAMES log REQUIRED)
 add_library(magpie_test_renderer SHARED MagpieTestRenderer.cpp)
 add_dependencies(magpie_test_renderer magpie_test_shaders)
 target_include_directories(magpie_test_renderer PRIVATE ${MAGPIE_SHADER_DIR})
 target_link_libraries(magpie_test_renderer PRIVATE
     "${MAGPIE_VULKAN_LIBRARY}"
-    "${MAGPIE_ANDROID_LIBRARY}")
+    "${MAGPIE_ANDROID_LIBRARY}"
+    "${MAGPIE_LOG_LIBRARY}")
 target_compile_options(magpie_test_renderer PRIVATE -Wall -Wextra)
