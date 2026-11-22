@@ -24,6 +24,7 @@
 //   L3 PASS    — no substitution; the app's original swapchain is handed through untouched
 #define VK_USE_PLATFORM_ANDROID_KHR
 #include <vulkan/vulkan.h>
+#include <vulkan/vk_layer.h>
 #include <android/log.h>
 #include <sys/system_properties.h>
 #include <algorithm>
@@ -216,16 +217,21 @@ bool initEngine(DeviceData* d) {
     if (d->engineReady) return true;
     if (d->engineFailed) return false;
 
-    auto create = [&]<typename Fn>(const char* name) {
-        return reinterpret_cast<Fn>(d->gdpA_next(d->device, name));
+    auto create = [&](const char* name) {
+        return d->gdpA_next(d->device, name);
     };
-    const auto createShaderModule = create<PFN_vkCreateShaderModule>("vkCreateShaderModule");
-    const auto createDescriptorSetLayout =
-        create<PFN_vkCreateDescriptorSetLayout>("vkCreateDescriptorSetLayout");
-    const auto createPipelineLayout = create<PFN_vkCreatePipelineLayout>("vkCreatePipelineLayout");
-    const auto createComputePipelines = create<PFN_vkCreateComputePipelines>("vkCreateComputePipelines");
-    const auto createSampler = create<PFN_vkCreateSampler>("vkCreateSampler");
-    const auto destroyShaderModule = create<PFN_vkDestroyShaderModule>("vkDestroyShaderModule");
+    const auto createShaderModule = reinterpret_cast<PFN_vkCreateShaderModule>(
+        create("vkCreateShaderModule"));
+    const auto createDescriptorSetLayout = reinterpret_cast<PFN_vkCreateDescriptorSetLayout>(
+        create("vkCreateDescriptorSetLayout"));
+    const auto createPipelineLayout = reinterpret_cast<PFN_vkCreatePipelineLayout>(
+        create("vkCreatePipelineLayout"));
+    const auto createComputePipelines = reinterpret_cast<PFN_vkCreateComputePipelines>(
+        create("vkCreateComputePipelines"));
+    const auto createSampler = reinterpret_cast<PFN_vkCreateSampler>(
+        create("vkCreateSampler"));
+    const auto destroyShaderModule = reinterpret_cast<PFN_vkDestroyShaderModule>(
+        create("vkDestroyShaderModule"));
 
     VkShaderModuleCreateInfo smi{};
     smi.sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
