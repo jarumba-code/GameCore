@@ -119,7 +119,11 @@ endif()
 add_library(VkLayer_MagpieFSR SHARED
     ${MAGPIE_ROOT}/vulkan-layer/src/magpie_layer.cpp)
 add_dependencies(VkLayer_MagpieFSR magpie_test_shaders)
-target_include_directories(VkLayer_MagpieFSR PRIVATE ${MAGPIE_SHADER_DIR})
+# vk_layer.h is a Vulkan loader interface header, not part of the Android NDK public Vulkan headers.
+# Vendor the pinned Khronos header; vulkan_core.h resolves from the NDK sysroot.
+target_include_directories(VkLayer_MagpieFSR PRIVATE
+    ${MAGPIE_SHADER_DIR}
+    ${MAGPIE_ROOT}/third_party/Vulkan-Headers/include)
 target_link_libraries(VkLayer_MagpieFSR PRIVATE "${MAGPIE_VULKAN_LIBRARY}")
 target_compile_options(VkLayer_MagpieFSR PRIVATE -Wall -Wextra)
 
