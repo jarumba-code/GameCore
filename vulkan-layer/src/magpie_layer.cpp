@@ -1417,3 +1417,51 @@ magpie_GetDeviceProcAddr(VkDevice device, const char* name) {
     if (!d || !d->gdpA_next) return nullptr;
     return d->gdpA_next(device, name);
 }
+
+/*
+ * Android's Vulkan loader resolves layer entry points by exported symbol name. Keep the
+ * layer-specific Get*ProcAddr names and canonical introspection names available; the internal
+ * magpie_* names above are the implementation functions used by the dispatch chain.
+ */
+extern "C" VKAPI_ATTR PFN_vkVoidFunction VKAPI_CALL
+VK_LAYER_MAGPIE_FSR1GetInstanceProcAddr(VkInstance instance, const char* name) {
+    return reinterpret_cast<PFN_vkVoidFunction>(magpie_GetInstanceProcAddr(instance, name));
+}
+
+extern "C" VKAPI_ATTR PFN_vkVoidFunction VKAPI_CALL
+VK_LAYER_MAGPIE_FSR1GetDeviceProcAddr(VkDevice device, const char* name) {
+    return reinterpret_cast<PFN_vkVoidFunction>(magpie_GetDeviceProcAddr(device, name));
+}
+
+extern "C" VKAPI_ATTR VkResult VKAPI_CALL
+vkEnumerateInstanceLayerProperties(uint32_t* pPropertyCount, VkLayerProperties* pProperties) {
+    return magpie_EnumerateInstanceLayerProperties(pPropertyCount, pProperties);
+}
+
+extern "C" VKAPI_ATTR VkResult VKAPI_CALL
+vkEnumerateInstanceExtensionProperties(const char* pLayerName, uint32_t* pPropertyCount,
+                                       VkExtensionProperties* pProperties) {
+    if (pLayerName && std::strcmp(pLayerName, MAGPIE_LAYER_NAME) != 0)
+        return VK_ERROR_LAYER_NOT_PRESENT;
+    if (!pPropertyCount) return VK_ERROR_INITIALIZATION_FAILED;
+    *pPropertyCount = 0;
+    (void)pProperties;
+    return VK_SUCCESS;
+}
+
+extern "C" VKAPI_ATTR VkResult VKAPI_CALL
+vkEnumerateDeviceLayerProperties(VkPhysicalDevice, uint32_t* pPropertyCount,
+                                 VkLayerProperties* pProperties) {
+    return magpie_EnumerateInstanceLayerProperties(pPropertyCount, pProperties);
+}
+
+extern "C" VKAPI_ATTR VkResult VKAPI_CALL
+vkEnumerateDeviceExtensionProperties(VkPhysicalDevice, const char* pLayerName,
+                                     uint32_t* pPropertyCount, VkExtensionProperties* pProperties) {
+    if (pLayerName && std::strcmp(pLayerName, MAGPIE_LAYER_NAME) != 0)
+        return VK_ERROR_LAYER_NOT_PRESENT;
+    if (!pPropertyCount) return VK_ERROR_INITIALIZATION_FAILED;
+    *pPropertyCount = 0;
+    (void)pProperties;
+    return VK_SUCCESS;
+}
