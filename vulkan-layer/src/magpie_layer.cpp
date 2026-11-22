@@ -359,12 +359,16 @@ void recordBarrier(VkCommandBuffer cb, VkImage image, VkImageLayout from, VkImag
 // Instance chain
 // ---------------------------------------------------------------------------
 
-static const VkLayerProperties MAGPIE_LAYER_PROPERTIES = {
-    MAGPIE_LAYER_NAME,
-    VK_MAKE_VERSION(1, 0, 0),
-    VK_MAKE_VERSION(1, 0, 0),
-    "Magpie FSR 1.0.2 swapchain layer (GameCore controlled test app only)",
-};
+static const VkLayerProperties MAGPIE_LAYER_PROPERTIES = [] {
+    VkLayerProperties properties{};
+    std::strncpy(properties.layerName, MAGPIE_LAYER_NAME, sizeof(properties.layerName) - 1);
+    properties.specVersion = VK_MAKE_VERSION(1, 0, 0);
+    properties.implementationVersion = VK_MAKE_VERSION(1, 0, 0);
+    std::strncpy(properties.description,
+                 "Magpie FSR 1.0.2 swapchain layer (GameCore controlled test app only)",
+                 sizeof(properties.description) - 1);
+    return properties;
+}();
 
 extern "C" VKAPI_ATTR VkResult VKAPI_CALL
 magpie_EnumerateInstanceLayerProperties(uint32_t* pPropertyCount, VkLayerProperties* pProperties) {
@@ -427,13 +431,13 @@ magpie_CreateInstance(const VkInstanceCreateInfo* pCreateInfo, const VkAllocatio
     auto* chainInfo = static_cast<VkLayerInstanceCreateInfo*>(
         const_cast<void*>(pCreateInfo->pNext));
     PFN_vkGetInstanceProcAddr gpiA_next = nullptr;
-    while (chainInfo && !(chainInfo.sType == VK_STRUCTURE_TYPE_LOADER_INSTANCE_CREATE_INFO &&
-                          chainInfo.function == VK_LAYER_LINK_INFO)) {
-        chainInfo = static_cast<VkLayerInstanceCreateInfo*>(const_cast<void*>(chainInfo.pNext));
+    while (chainInfo && !(chainInfo->sType == VK_STRUCTURE_TYPE_LOADER_INSTANCE_CREATE_INFO &&
+                          chainInfo->function == VK_LAYER_LINK_INFO)) {
+        chainInfo = static_cast<VkLayerInstanceCreateInfo*>(const_cast<void*>(chainInfo->pNext));
     }
     if (chainInfo) {
-        gpiA_next = chainInfo.u.pLayerInfo->pfnNextGetInstanceProcAddr;
-        chainInfo.u.pLayerInfo = chainInfo.u.pLayerInfo->pNext;
+        gpiA_next = chainInfo->u.pLayerInfo->pfnNextGetInstanceProcAddr;
+        chainInfo->u.pLayerInfo = chainInfo->u.pLayerInfo->pNext;
     } else {
         LOGE("loader link info missing; layer cannot chain");
         return VK_ERROR_INITIALIZATION_FAILED;
@@ -516,7 +520,7 @@ magpie_GetInstanceProcAddr(VkInstance instance, const char* name) {
     if (strcmp(name, "vkDestroyInstance") == 0)
         return reinterpret_cast<void*>(&magpie_DestroyInstance);
     const auto gpiA_next = instance ? nextGpiA(instance) : nullptr;
-    return gpiA_next ? gpiA_next(instance, name) : nullptr;
+    return gpiA_next ? reinterpret_cast<void*>(gpiA_next(instance, name)) : nullptr;
 }
 
 // ---------------------------------------------------------------------------
@@ -534,14 +538,14 @@ magpie_CreateDevice(VkPhysicalDevice physical, const VkDeviceCreateInfo* pCreate
     auto* chainInfo = static_cast<VkLayerDeviceCreateInfo*>(const_cast<void*>(pCreateInfo->pNext));
     PFN_vkGetInstanceProcAddr gpiA_next = nullptr;
     PFN_vkGetDeviceProcAddr gdpA_next = nullptr;
-    while (chainInfo && !(chainInfo.sType == VK_STRUCTURE_TYPE_LOADER_DEVICE_CREATE_INFO &&
-                          chainInfo.function == VK_LAYER_LINK_INFO)) {
-        chainInfo = static_cast<VkLayerDeviceCreateInfo*>(const_cast<void*>(chainInfo.pNext));
+    while (chainInfo && !(chainInfo->sType == VK_STRUCTURE_TYPE_LOADER_DEVICE_CREATE_INFO &&
+                          chainInfo->function == VK_LAYER_LINK_INFO)) {
+        chainInfo = static_cast<VkLayerDeviceCreateInfo*>(const_cast<void*>(chainInfo->pNext));
     }
     if (chainInfo) {
-        gpiA_next = chainInfo.u.pLayerInfo->pfnNextGetInstanceProcAddr;
-        gdpA_next = chainInfo.u.pLayerInfo->pfnNextGetDeviceProcAddr;
-        chainInfo.u.pLayerInfo = chainInfo.u.pLayerInfo->pNext;
+        gpiA_next = chainInfo->u.pLayerInfo->pfnNextGetInstanceProcAddr;
+        gdpA_next = chainInfo->u.pLayerInfo->pfnNextGetDeviceProcAddr;
+        chainInfo->u.pLayerInfo = chainInfo->u.pLayerInfo->pNext;
     } else {
         LOGE("device loader link info missing");
         return VK_ERROR_INITIALIZATION_FAILED;
@@ -748,7 +752,7 @@ magpie_CreateSwapchainKHR(VkDevice device, const VkSwapchainCreateInfoKHR* pCrea
 
     VkSwapchainCreateInfoKHR realCi = *pCreateInfo;
     realCi.imageExtent = caps.currentExtent;  // Android requires the window's own extent
-    realCi.imageUsage |= VK_IMAGE_USAGE_TRANSFER_DST;  // for the FSR/blit copy-in
+    realCi.imageUsage |= VK_IMAGE_USAGE_TRANSFER_DST_BIT;  // for the FSR/blit copy-in
     // The app holds the real swapchain handle, so preserve Vulkan's oldSwapchain retirement
     // semantics instead of silently severing the relationship during recreation.
     realCi.oldSwapchain = pCreateInfo->oldSwapchain;
@@ -1525,7 +1529,7 @@ magpie_GetDeviceProcAddr(VkDevice device, const char* name) {
         return reinterpret_cast<void*>(&magpie_QueuePresentKHR);
     auto* d = deviceData(device);
     if (!d || !d->gdpA_next) return nullptr;
-    return d->gdpA_next(device, name);
+    return reinterpret_cast<void*>(d->gdpA_next(device, name));
 }
 
 /*
