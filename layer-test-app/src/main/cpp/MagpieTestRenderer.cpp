@@ -207,6 +207,7 @@ struct Renderer {
         surfaceExtent = caps.currentExtent;
         extent = surfaceExtent;
         const bool wasSubstituted = substituted;
+        const VkExtent2D oldRenderExtent = extent;
         VkSwapchainCreateInfoKHR sci{};
         sci.sType = VK_STRUCTURE_TYPE_SWAPCHAIN_CREATE_INFO_KHR;
         sci.surface = surface;
@@ -245,6 +246,11 @@ struct Renderer {
         }
         if (old != VK_NULL_HANDLE && wasSubstituted != substituted) {
             LOGE("layer substitution mode changed during swapchain recreation; stopping safely");
+            vkDestroySwapchainKHR(device, swapchain, nullptr);
+            swapchain = old;
+            substituted = wasSubstituted;
+            extent = oldRenderExtent;
+            running = false;
             return false;
         }
         LOGI("renderer extents: surface=%ux%u render=%ux%u substituted=%d",
@@ -262,9 +268,17 @@ struct Renderer {
             vkDestroySwapchainKHR(device, old, nullptr);
             recreated++;
         }
-        vkGetSwapchainImagesKHR(device, swapchain, &imageCount, nullptr);
+        imageCount = 0;
+        if (vkGetSwapchainImagesKHR(device, swapchain, &imageCount, nullptr) != VK_SUCCESS ||
+            imageCount == 0) {
+            LOGE("swapchain image count query failed");
+            return false;
+        }
         swapchainImages.resize(imageCount);
-        vkGetSwapchainImagesKHR(device, swapchain, &imageCount, swapchainImages.data());
+        if (vkGetSwapchainImagesKHR(device, swapchain, &imageCount, swapchainImages.data()) != VK_SUCCESS) {
+            LOGE("swapchain image handle query failed");
+            return false;
+        }
         // THE DIAGNOSTIC LINE: what images did the app actually get? With the layer substituted,
         // this extent is the reduced one (e.g. 800x360 on the 1600x720 surface).
         LOGI("swapchain images: count=%u surface=%ux%u render=%ux%u",
@@ -439,17 +453,43 @@ struct Renderer {
         uint32_t imageIndex = 0;
         FrameSync& s = sync[frameIndex % 2];
         vkWaitForFences(device, 1, &s.inFlight, VK_TRUE, UINT64_MAX);
+        const VkResult frameWait = vkWaitForFences(device, 1, &s.inFlight, VK_TRUE, UINT64_MAX);
+        if (frameWait != VK_SUCCESS) {
+            LOGE("frame fence wait failed: %d", (int)frameWait);
+            running = false;
+            return;
+        }
         VkResult acquire = vkAcquireNextImageKHR(device, swapchain, UINT64_MAX,
                                                  s.imageAvailable, VK_NULL_HANDLE, &imageIndex);
-        if (acquire == VK_ERROR_OUT_OF_DATE_KHR || acquire == VK_SUBOPTIMAL_KHR) {
-            if (!createSwapchainObjects() || !rebuildFramebuffersOnly()) return;
+        if (acquire == VK_ERROR_OUT_OF_DATE_KHR) {
+            if (!createSwapchainObjects() || !rebuildFramebuffersOnly()) running = false;
+            return;
+        }
+        if (acquire != VK_SUCCESS && acquire != VK_SUBOPTIMAL_KHR) {
+            LOGE("swapchain image acquisition failed: %d", (int)acquire);
+            running = false;
+            return;
+        }
+        const bool acquireSuboptimal = acquire == VK_SUBOPTIMAL_KHR;
+        if (imageIndex >= commandBuffers.size() || imageIndex >= framebuffers.size() ||
+            imageIndex >= renderDoneByImage.size()) {
+            LOGE("acquired image index %u exceeds renderer resources", imageIndex);
+            running = false;
             return;
         }
         VkCommandBuffer cb = commandBuffers[imageIndex];
-        vkResetCommandBuffer(cb, VK_COMMAND_BUFFER_RESET_RELEASE_RESOURCES_BIT);
+        if (vkResetCommandBuffer(cb, VK_COMMAND_BUFFER_RESET_RELEASE_RESOURCES_BIT) != VK_SUCCESS) {
+            LOGE("command buffer reset failed");
+            running = false;
+            return;
+        }
         VkCommandBufferBeginInfo bi{};
         bi.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
-        vkBeginCommandBuffer(cb, &bi);
+        if (vkBeginCommandBuffer(cb, &bi) != VK_SUCCESS) {
+            LOGE("command buffer begin failed");
+            running = false;
+            return;
+        }
         VkClearValue clear{{{0.05f, 0.05f, 0.08f, 1.0f}}};
         VkRenderPassBeginInfo rp{};
         rp.sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
@@ -469,7 +509,11 @@ struct Renderer {
         vkCmdPushConstants(cb, pipelineLayout, VK_SHADER_STAGE_FRAGMENT_BIT, 0, 4, &time);
         vkCmdDraw(cb, 3, 1, 0, 0);
         vkCmdEndRenderPass(cb);
-        vkEndCommandBuffer(cb);
+        if (vkEndCommandBuffer(cb) != VK_SUCCESS) {
+            LOGE("command buffer end failed");
+            running = false;
+            return;
+        }
 
         VkPipelineStageFlags waitStage = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
         VkSubmitInfo si{};
@@ -481,9 +525,14 @@ struct Renderer {
         si.pCommandBuffers = &cb;
         si.signalSemaphoreCount = 1;
         si.pSignalSemaphores = &renderDoneByImage[imageIndex];
-        vkResetFences(device, 1, &s.inFlight);
+        if (vkResetFences(device, 1, &s.inFlight) != VK_SUCCESS) {
+            LOGE("frame fence reset failed");
+            running = false;
+            return;
+        }
         if (vkQueueSubmit(queue, 1, &si, s.inFlight) != VK_SUCCESS) {
             LOGE("graphics queue submission failed");
+            running = false;
             return;
         }
 
@@ -504,12 +553,51 @@ struct Renderer {
                  static_cast<unsigned long long>(frames), frames / elapsed,
                  extent.width, extent.height, recreated);
         }
-        if (present == VK_ERROR_OUT_OF_DATE_KHR) {
-            createSwapchainObjects();
+        if (present == VK_ERROR_OUT_OF_DATE_KHR || present == VK_SUBOPTIMAL_KHR ||
+            acquireSuboptimal) {
+            if (!createSwapchainObjects() || !rebuildFramebuffersOnly()) running = false;
+        } else if (present != VK_SUCCESS) {
+            LOGE("queue presentation failed: %d", (int)present);
+            running = false;
         }
     }
 
-    bool rebuildFramebuffersOnly() { return true; }  // full rebuild happened in createSwapchainObjects
+    bool rebuildFramebuffersOnly() {
+        // Swapchain image count can change across recreation. The device was idled in
+        // createSwapchainObjects, so old per-image command buffers are no longer in flight.
+        if (!commandBuffers.empty()) {
+            vkFreeCommandBuffers(device, commandPool,
+                                 static_cast<uint32_t>(commandBuffers.size()),
+                                 commandBuffers.data());
+            commandBuffers.clear();
+        }
+        commandBuffers.resize(imageCount);
+        VkCommandBufferAllocateInfo cai{};
+        cai.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
+        cai.commandPool = commandPool;
+        cai.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
+        cai.commandBufferCount = imageCount;
+        if (vkAllocateCommandBuffers(device, &cai, commandBuffers.data()) != VK_SUCCESS) {
+            LOGE("command buffer reallocation failed");
+            return false;
+        }
+        framebuffers.resize(imageCount);
+        for (uint32_t i = 0; i < imageCount; ++i) {
+            VkFramebufferCreateInfo fci{};
+            fci.sType = VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO;
+            fci.renderPass = renderPass;
+            fci.attachmentCount = 1;
+            fci.pAttachments = &imageViews[i];
+            fci.width = extent.width;
+            fci.height = extent.height;
+            fci.layers = 1;
+            if (vkCreateFramebuffer(device, &fci, nullptr, &framebuffers[i]) != VK_SUCCESS) {
+                LOGE("framebuffer recreation failed at image %u", i);
+                return false;
+            }
+        }
+        return true;
+    }
 
     void teardown() {
         running = false;
