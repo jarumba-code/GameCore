@@ -159,6 +159,19 @@ DeviceData* deviceData(VkDevice device) {
 }
 
 extern "C" VKAPI_ATTR VkResult VKAPI_CALL
+magpie_GetSwapchainRenderExtent(VkDevice device, VkSwapchainKHR swapchain,
+                                VkExtent2D* pRenderExtent) {
+    auto* d = deviceData(device);
+    if (!d || !pRenderExtent) return VK_ERROR_INITIALIZATION_FAILED;
+    std::lock_guard<std::mutex> guard(d->lock);
+    const auto it = d->substitutions.find(swapchain);
+    if (it == d->substitutions.end() || it->second.mode == Mode::PASS)
+        return VK_ERROR_FEATURE_NOT_PRESENT;
+    *pRenderExtent = it->second.lowExtent;
+    return VK_SUCCESS;
+}
+
+extern "C" VKAPI_ATTR VkResult VKAPI_CALL
 magpie_SetFakeImageFinalLayout(VkDevice device, VkImageLayout layout) {
     auto* d = deviceData(device);
     if (!d || (layout != VK_IMAGE_LAYOUT_PRESENT_SRC_KHR && layout != VK_IMAGE_LAYOUT_GENERAL))
@@ -1371,6 +1384,8 @@ magpie_GetDeviceProcAddr(VkDevice device, const char* name) {
         return reinterpret_cast<void*>(&magpie_GetDeviceProcAddr);
     if (strcmp(name, "vkMagpieSetFakeImageFinalLayout") == 0)
         return reinterpret_cast<void*>(&magpie_SetFakeImageFinalLayout);
+    if (strcmp(name, "vkMagpieGetSwapchainRenderExtent") == 0)
+        return reinterpret_cast<void*>(&magpie_GetSwapchainRenderExtent);
     if (strcmp(name, "vkDestroyDevice") == 0)
         return reinterpret_cast<void*>(&magpie_DestroyDevice);
     if (strcmp(name, "vkGetDeviceQueue") == 0)
