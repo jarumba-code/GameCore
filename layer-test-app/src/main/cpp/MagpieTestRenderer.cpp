@@ -154,6 +154,9 @@ struct Renderer {
             vkGetInstanceProcAddr(instance, "vkGetPhysicalDeviceSurfaceSupportKHR"));
         for (uint32_t i = 0; i < familyCount; ++i) {
             if (!(families[i].queueFlags & VK_QUEUE_GRAPHICS_BIT)) continue;
+            // The layer records compute EASU/RCAS work on the app's present queue. The
+            // controlled test app therefore selects a graphics+present+compute family.
+            if (enableLayer && !(families[i].queueFlags & VK_QUEUE_COMPUTE_BIT)) continue;
             VkBool32 supported = VK_FALSE;
             if (presentSupport && presentSupport(physical, i, surface, &supported) == VK_SUCCESS &&
                 supported) {
