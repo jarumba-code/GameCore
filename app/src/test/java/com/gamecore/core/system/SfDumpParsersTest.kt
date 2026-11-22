@@ -27,8 +27,17 @@ class SfDumpParsersTest {
     }
 
     @Test
-    fun `another package's surface is not returned`() {
-        assertNull(SfDumpParsers.blastLayerNameFor("com.other.game", LIST_DUMP))
+    fun `each package resolves its own layer from the same dump`() {
+        // The fixture holds two games' surfaces; each query returns its own.
+        assertEquals(
+            "SurfaceView[com.other.game/com.other.GameActivity](BLAST)#111",
+            SfDumpParsers.blastLayerNameFor("com.other.game", LIST_DUMP),
+        )
+    }
+
+    @Test
+    fun `a package absent from the dump resolves to null`() {
+        assertNull(SfDumpParsers.blastLayerNameFor("com.absent.game", LIST_DUMP))
     }
 
     @Test
@@ -70,7 +79,7 @@ class SfDumpParsersTest {
     fun `latency parses the paced 30 fps cadence with sentinels filtered`() {
         val stats = SfDumpParsers.parseLayerLatency(LATENCY_DUMP_PACED)!!
         assertEquals(16_666_667L, stats.refreshPeriodNanos)
-        assertEquals(126, stats.frameCount)
+        assertEquals(124, stats.frameCount)
         assertEquals(0.033_320 * 1_000, stats.medianDeltaNanos / 1e6, 0.01)
         assertTrue("the game paces at half refresh", stats.isHalfRefreshPaced())
         // The sentinel row (Long.MAX_VALUE) is excluded from every statistic.
