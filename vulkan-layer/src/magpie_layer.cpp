@@ -443,6 +443,10 @@ magpie_DestroyInstance(VkInstance instance, const VkAllocationCallbacks* allocat
     }
 }
 
+extern "C" VKAPI_ATTR VkResult VKAPI_CALL
+magpie_CreateDevice(VkPhysicalDevice physical, const VkDeviceCreateInfo* pCreateInfo,
+                    const VkAllocationCallbacks* pAllocator, VkDevice* pDevice);
+
 extern "C" VKAPI_ATTR void* VKAPI_CALL
 magpie_GetInstanceProcAddr(VkInstance instance, const char* name) {
     if (!name) return nullptr;
@@ -459,6 +463,8 @@ magpie_GetInstanceProcAddr(VkInstance instance, const char* name) {
         return reinterpret_cast<void*>(&magpie_EnumerateDeviceExtensionProperties);
     if (strcmp(name, "vkCreateInstance") == 0)
         return reinterpret_cast<void*>(&magpie_CreateInstance);
+    if (strcmp(name, "vkCreateDevice") == 0)
+        return reinterpret_cast<void*>(&magpie_CreateDevice);
     if (strcmp(name, "vkDestroyInstance") == 0)
         return reinterpret_cast<void*>(&magpie_DestroyInstance);
     const auto gpiA_next = instance ? nextGpiA(instance) : nullptr;
