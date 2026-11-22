@@ -45,6 +45,7 @@ struct Renderer {
     ANativeWindow* window = nullptr;
     bool layerEnabled = false;
     bool substituted = false;
+    std::string initStage = "starting Vulkan initialization";
 
     VkInstance instance = VK_NULL_HANDLE;
     VkSurfaceKHR surface = VK_NULL_HANDLE;
@@ -79,6 +80,7 @@ struct Renderer {
     bool init(ANativeWindow* win, bool enableLayer) {
         window = win;
         layerEnabled = enableLayer;
+        initStage = "creating Vulkan instance";
         ANativeWindow_acquire(win);
 
         VkApplicationInfo app{};
@@ -108,6 +110,7 @@ struct Renderer {
             return false;
         }
 
+        initStage = "creating Android Vulkan surface";
         const auto createAndroidSurface = reinterpret_cast<PFN_vkCreateAndroidSurfaceKHR>(
             vkGetInstanceProcAddr(instance, "vkCreateAndroidSurfaceKHR"));
         VkAndroidSurfaceCreateInfoKHR sci{};
@@ -119,6 +122,7 @@ struct Renderer {
             return false;
         }
 
+        initStage = "enumerating Vulkan physical devices";
         uint32_t physicalCount = 0;
         vkEnumeratePhysicalDevices(instance, &physicalCount, nullptr);
         if (physicalCount == 0) {
@@ -131,6 +135,7 @@ struct Renderer {
 
         // The layer's EASU/RCAS storage images and copy path are RGBA8_UNORM. Do not
         // silently create an incompatible BGRA or sRGB swapchain on devices that lack it.
+        initStage = "checking supported Android surface formats";
         uint32_t surfaceFormatCount = 0;
         if (vkGetPhysicalDeviceSurfaceFormatsKHR(physical, surface, &surfaceFormatCount, nullptr) != VK_SUCCESS ||
             surfaceFormatCount == 0) {
@@ -158,6 +163,7 @@ struct Renderer {
             return false;
         }
 
+        initStage = "finding a graphics and presentation queue";
         uint32_t familyCount = 0;
         vkGetPhysicalDeviceQueueFamilyProperties(physical, &familyCount, nullptr);
         std::vector<VkQueueFamilyProperties> families(familyCount);
@@ -217,6 +223,7 @@ struct Renderer {
             }
             deviceExts.push_back(magpieControlExt);
         }
+        initStage = "creating Vulkan logical device";
         VkDeviceCreateInfo dci{};
         dci.sType = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO;
         dci.queueCreateInfoCount = 1;
@@ -229,6 +236,7 @@ struct Renderer {
         }
         vkGetDeviceQueue(device, graphicsFamily, 0, &queue);
         if (layerEnabled) {
+            initStage = "checking Magpie layer control extension";
             using PFN_vkMagpieSetFakeImageFinalLayout =
                 VkResult(VKAPI_PTR*)(VkDevice, VkImageLayout);
             const auto setFakeLayout = reinterpret_cast<PFN_vkMagpieSetFakeImageFinalLayout>(
@@ -240,6 +248,7 @@ struct Renderer {
             }
         }
 
+        initStage = "querying Android surface capabilities";
         // The critical diagnostic pair: the surface's own extent vs the extent the swapchain
         // images report. With the layer substituted they differ (low-res images on a native
         // surface); without it they match.
@@ -252,7 +261,12 @@ struct Renderer {
              caps.minImageExtent.width, caps.minImageExtent.height);
         surfaceExtent = caps.currentExtent;
         extent = surfaceExtent;
-        return createSwapchainObjects() && createRenderPipeline();
+        initStage = "creating swapchain and image views";
+        if (!createSwapchainObjects()) return false;
+        initStage = "creating graphics render pipeline and frame resources";
+        if (!createRenderPipeline()) return false;
+        initStage = "ready";
+        return true;
     }
 
     bool createSwapchainObjects() {
@@ -742,17 +756,51 @@ Renderer* g_renderer = nullptr;
 
 }  // namespace
 
+static void notifyActivity(JNIEnv* env, jobject activity, const std::string& message) {
+    if (!env || !activity) return;
+    jclass cls = env->GetObjectClass(activity);
+    if (!cls) return;
+    jmethodID method = env->GetMethodID(cls, "onNativeStatus", "(Ljava/lang/String;)V");
+    if (method) {
+        jstring value = env->NewStringUTF(message.c_str());
+        if (value) {
+            env->CallVoidMethod(activity, method, value);
+            env->DeleteLocalRef(value);
+        }
+    }
+    if (env->ExceptionCheck()) env->ExceptionClear();
+    env->DeleteLocalRef(cls);
+}
+
 extern "C" JNIEXPORT void JNICALL
 Java_com_gamecore_magpietest_RendererNative_onSurfaceCreated(JNIEnv* env, jclass,
-                                                             jobject surface, jboolean layer) {
-    if (g_renderer) return;
+                                                             jobject surface, jboolean layer,
+                                                             jobject activity) {
+    if (g_renderer) {
+        notifyActivity(env, activity, "Renderer is already running.");
+        return;
+    }
     ANativeWindow* win = ANativeWindow_fromSurface(env, surface);
+    if (!win) {
+        notifyActivity(env, activity, "Vulkan startup failed: Android did not provide a native window.");
+        return;
+    }
     auto* renderer = new Renderer();
     if (renderer->init(win, layer == JNI_TRUE)) {
         g_renderer = renderer;
         renderer->running = true;
+        if (layer == JNI_TRUE) {
+            notifyActivity(env, activity, renderer->substituted
+                ? "Layer renderer ready: reduced-resolution image substitution detected."
+                : "Renderer ready, but Magpie image substitution was NOT detected.");
+        } else {
+            notifyActivity(env, activity, "Baseline renderer ready: native-resolution Vulkan path.");
+        }
         renderer->thread = std::thread([renderer] { renderer->run(); });
     } else {
+        const std::string message = "Vulkan startup failed at: " + renderer->initStage +
+            ". No frames were presented; send this message and the MagpieTest log.";
+        notifyActivity(env, activity, message);
         delete renderer;
         LOGE("renderer initialization failed — no frames will be presented");
     }
