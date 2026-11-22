@@ -133,6 +133,12 @@ std::unordered_map<VkDevice, DeviceData*> g_devices;
 std::mutex g_swapchainOwnerLock;
 std::unordered_map<VkSwapchainKHR, DeviceData*> g_swapchainOwners;
 
+void registerSwapchainOwner(VkSwapchainKHR swapchain, DeviceData* device) {
+    if (swapchain == VK_NULL_HANDLE || device == nullptr) return;
+    std::lock_guard<std::mutex> guard(g_swapchainOwnerLock);
+    g_swapchainOwners[swapchain] = device;
+}
+
 PFN_vkGetInstanceProcAddr nextGpiA(VkInstance instance) {
     std::lock_guard<std::mutex> guard(g_instanceLock);
     const auto it = g_nextGpiA.find(instance);
@@ -554,7 +560,9 @@ magpie_CreateSwapchainKHR(VkDevice device, const VkSwapchainCreateInfoKHR* pCrea
             d->gpiA_next(nullptr, "vkGetPhysicalDeviceSurfaceCapabilitiesKHR"));
         if (!surfaceCaps || surfaceCaps(d->physical, pCreateInfo->surface, &caps) != VK_SUCCESS) {
             LOGW("surface capabilities unavailable; passing swapchain through unsubstituted");
-            return createSwapchain(device, pCreateInfo, pAllocator, pSwapchain);
+            const VkResult passResult = createSwapchain(device, pCreateInfo, pAllocator, pSwapchain);
+            if (passResult == VK_SUCCESS) registerSwapchainOwner(*pSwapchain, d);
+            return passResult;
         }
     }
 
@@ -577,6 +585,7 @@ magpie_CreateSwapchainKHR(VkDevice device, const VkSwapchainCreateInfoKHR* pCrea
         // Without TRANSFER_DST neither copy nor blit into the real image is possible.
         LOGW("real swapchain lacks TRANSFER_DST; layer is in passthrough mode (L3)");
         *pSwapchain = real;
+        registerSwapchainOwner(real, d);
         return VK_SUCCESS;
     }
 
@@ -586,8 +595,23 @@ magpie_CreateSwapchainKHR(VkDevice device, const VkSwapchainCreateInfoKHR* pCrea
     if (getSwapchainImages(device, real, &imageCount, nullptr) != VK_SUCCESS || imageCount == 0) {
         LOGE("real swapchain image count unavailable; passthrough mode (L3)");
         *pSwapchain = real;
+        registerSwapchainOwner(real, d);
         return VK_SUCCESS;
     }
+
+    std::vector<VkImage> realImages(imageCount);
+    uint32_t fetchedImageCount = imageCount;
+    const VkResult fetchImagesResult =
+        getSwapchainImages(device, real, &fetchedImageCount, realImages.data());
+    if ((fetchImagesResult != VK_SUCCESS && fetchImagesResult != VK_INCOMPLETE) ||
+        fetchedImageCount == 0) {
+        LOGE("real swapchain image handles unavailable; passthrough mode (L3)");
+        *pSwapchain = real;
+        registerSwapchainOwner(real, d);
+        return VK_SUCCESS;
+    }
+    realImages.resize(fetchedImageCount);
+    imageCount = fetchedImageCount;
 
     // Decide the mode. FSR requires the app-facing format to be RGBA8_UNORM (the compiled
     // shaders store with an rgba8 qualifier); the engine is created here so the ladder settles
@@ -611,6 +635,7 @@ magpie_CreateSwapchainKHR(VkDevice device, const VkSwapchainCreateInfoKHR* pCrea
     sub.realExtent = realCi.imageExtent;
     sub.format = realCi.imageFormat;
     sub.imageCount = imageCount;
+    sub.realImages = std::move(realImages);
     sub.lowExtent.width = std::max(
         1u, static_cast<uint32_t>(std::lround(static_cast<float>(realCi.imageExtent.width) * scale)));
     sub.lowExtent.height = std::max(
@@ -700,9 +725,9 @@ magpie_CreateSwapchainKHR(VkDevice device, const VkSwapchainCreateInfoKHR* pCrea
     if (!fakeOk) {
         LOGW("low-resolution image creation failed; passthrough mode (L3)");
         destroySubstitution(d, sub);
-        deviceProc<PFN_vkDestroySwapchainKHR>(d, "vkDestroySwapchainKHR")(device, real, nullptr);
-        // Passthrough: give the app the native swapchain as-is.
+        // Keep the real swapchain alive: the app must receive a valid passthrough handle.
         *pSwapchain = real;
+        registerSwapchainOwner(real, d);
         return VK_SUCCESS;
     }
 
@@ -831,10 +856,9 @@ magpie_CreateSwapchainKHR(VkDevice device, const VkSwapchainCreateInfoKHR* pCrea
         if (!semsOk) {
             LOGW("present semaphore creation failed; passthrough mode (L3)");
             destroySubstitution(d, sub);
-            std::lock_guard<std::mutex> ownerGuard(g_swapchainOwnerLock);
-            g_swapchainOwners.erase(real);
-            deviceProc<PFN_vkDestroySwapchainKHR>(d, "vkDestroySwapchainKHR")(device, real, nullptr);
+            // Preserve the native swapchain and register it for safe QueuePresent passthrough.
             *pSwapchain = real;
+            registerSwapchainOwner(real, d);
             return VK_SUCCESS;
         }
     }
@@ -995,6 +1019,12 @@ magpie_QueuePresentKHR(VkQueue queue, const VkPresentInfoKHR* pPresentInfo) {
             }
         }
         if (!sub) {
+            const auto present = deviceProc<PFN_vkQueuePresentKHR>(d, "vkQueuePresentKHR");
+            return present(queue, pPresentInfo);
+        }
+        if (index >= sub->imageCount || index >= sub->fake.size() ||
+            index >= sub->realImages.size() || index >= sub->presentSems.size()) {
+            LOGE("present image index %u is outside substitution resources; passthrough", index);
             const auto present = deviceProc<PFN_vkQueuePresentKHR>(d, "vkQueuePresentKHR");
             return present(queue, pPresentInfo);
         }
