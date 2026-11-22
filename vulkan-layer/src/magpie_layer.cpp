@@ -1143,13 +1143,21 @@ magpie_QueuePresentKHR(VkQueue queue, const VkPresentInfoKHR* pPresentInfo) {
     uint32_t index = 0;
     {
         std::lock_guard<std::mutex> guard(d->lock);
-        // Single-swapchain presents are the app contract here; multi-swapchain presents pass
-        // through untouched rather than guessing synchronization across chains.
+        // The prototype processes exactly one substituted swapchain. A multi-swapchain
+        // present is safe to forward only when none of its chains has substituted images.
         if (pPresentInfo->swapchainCount == 1) {
             const auto it = d->substitutions.find(pPresentInfo->pSwapchains[0]);
             if (it != d->substitutions.end() && it->second.mode != Mode::PASS) {
                 sub = &it->second;
                 index = pPresentInfo->pImageIndices[0];
+            }
+        } else if (pPresentInfo->swapchainCount > 1) {
+            for (uint32_t i = 0; i < pPresentInfo->swapchainCount; ++i) {
+                const auto it = d->substitutions.find(pPresentInfo->pSwapchains[i]);
+                if (it != d->substitutions.end() && it->second.mode != Mode::PASS) {
+                    LOGE("multi-swapchain present includes substituted images; refusing unsafe passthrough");
+                    return VK_ERROR_INITIALIZATION_FAILED;
+                }
             }
         }
         if (!sub) {
