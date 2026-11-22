@@ -482,6 +482,10 @@ magpie_DestroyDevice(VkDevice device, const VkAllocationCallbacks* allocator) {
                 LOGE("waiting for layer work during device destruction failed: %d", (int)waitResult);
             d->commandPending = false;
         }
+        const auto waitDeviceIdle = deviceProc<PFN_vkDeviceWaitIdle>(d, "vkDeviceWaitIdle");
+        const VkResult idleResult = waitDeviceIdle(device);
+        if (idleResult != VK_SUCCESS)
+            LOGE("vkDeviceWaitIdle during device destruction returned %d", (int)idleResult);
         for (auto& entry : d->substitutions) {
             destroySubstitution(d, entry.second);
         }
@@ -962,13 +966,11 @@ magpie_DestroySwapchainKHR(VkDevice device, VkSwapchainKHR swapchain,
     auto* d = deviceData(device);
     if (d) {
         std::lock_guard<std::mutex> guard(d->lock);
-        if (d->commandPending && d->submitFence) {
-            const VkResult waitResult = deviceProc<PFN_vkWaitForFences>(d, "vkWaitForFences")(
-                device, 1, &d->submitFence, VK_TRUE, UINT64_MAX);
-            if (waitResult != VK_SUCCESS)
-                LOGE("waiting for layer work before swapchain destruction failed: %d", (int)waitResult);
-            d->commandPending = false;
-        }
+        const VkResult idleResult =
+            deviceProc<PFN_vkDeviceWaitIdle>(d, "vkDeviceWaitIdle")(device);
+        if (idleResult != VK_SUCCESS)
+            LOGE("vkDeviceWaitIdle before swapchain destruction returned %d", (int)idleResult);
+        d->commandPending = false;
         const auto it = d->substitutions.find(swapchain);
         if (it != d->substitutions.end()) {
             destroySubstitution(d, it->second);
@@ -1217,13 +1219,11 @@ magpie_QueuePresentKHR(VkQueue queue, const VkPresentInfoKHR* pPresentInfo) {
             // from the PRESENT_SRC layout, the contents will be the same"); srcAccessMask must
             // be 0 for a source layout of PRESENT_SRC. The semaphore wait on the app's
             // render-signal semaphore already orders the app's color writes before this barrier.
-            const bool fakeWasPresent = d->fakeFinalLayout == VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
+            // The app's render-signal semaphore is waited at ALL_COMMANDS in this submission,
+            // providing the cross-submit memory dependency for its final color writes.
             recordBarrier(d->command, fakeImage, d->fakeFinalLayout,
-                          VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-                          fakeWasPresent ? 0 : VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT,
-                          VK_ACCESS_SHADER_READ_BIT,
-                          fakeWasPresent ? VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT
-                                         : VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
+                          VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, 0, VK_ACCESS_SHADER_READ_BIT,
+                          VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
                           VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, barrier);
             recordBarrier(d->command, sub->middle.image, VK_IMAGE_LAYOUT_UNDEFINED,
                           VK_IMAGE_LAYOUT_GENERAL, 0, VK_ACCESS_SHADER_WRITE_BIT,
@@ -1292,13 +1292,9 @@ magpie_QueuePresentKHR(VkQueue queue, const VkPresentInfoKHR* pPresentInfo) {
         } else if (sub->mode == Mode::BLIT) {
             // fake: PRESENT_SRC → TRANSFER_SRC (same reasoning as the FSR barrier above);
             // blit scales low→native with a linear filter (bilinear upscale, no FSR).
-            const bool fakeWasPresent = d->fakeFinalLayout == VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
             recordBarrier(d->command, fakeImage, d->fakeFinalLayout,
-                          VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
-                          fakeWasPresent ? 0 : VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT,
-                          VK_ACCESS_TRANSFER_READ_BIT,
-                          fakeWasPresent ? VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT
-                                         : VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
+                          VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, 0, VK_ACCESS_TRANSFER_READ_BIT,
+                          VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
                           VK_PIPELINE_STAGE_TRANSFER_BIT, barrier);
             recordBarrier(d->command, realImage, VK_IMAGE_LAYOUT_UNDEFINED,
                           VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 0, VK_ACCESS_TRANSFER_WRITE_BIT,
