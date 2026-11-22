@@ -10,7 +10,7 @@ import android.view.WindowManager
  * Renders the deterministic test scene with [RendererNative] on a SurfaceView. The layer opt-in
  * happens at Vulkan instance creation, so a mode change always means relaunching this activity.
  */
-class RenderActivity : Activity(), SurfaceHolder.Callback2 {
+class RenderActivity : Activity(), SurfaceHolder.Callback {
     private lateinit var surfaceView: SurfaceView
 
     override fun onCreate(savedInstanceState: Bundle?) {
