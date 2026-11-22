@@ -107,6 +107,7 @@ add_custom_target(magpie_test_shaders
             ${MAGPIE_TEST_SPV})
 
 find_library(MAGPIE_VULKAN_LIBRARY NAMES vulkan REQUIRED)
+find_library(MAGPIE_LOG_LIBRARY NAMES log REQUIRED)
 if(NOT IS_ABSOLUTE "${MAGPIE_VULKAN_LIBRARY}" OR NOT EXISTS "${MAGPIE_VULKAN_LIBRARY}")
     message(FATAL_ERROR "Android Vulkan link library was not resolved: '${MAGPIE_VULKAN_LIBRARY}'")
 endif()
@@ -117,12 +118,13 @@ add_dependencies(VkLayer_MagpieFSR magpie_test_shaders)
 target_include_directories(VkLayer_MagpieFSR PRIVATE
     ${MAGPIE_SHADER_DIR}
     ${MAGPIE_ROOT}/third_party/Vulkan-Headers/include)
-target_link_libraries(VkLayer_MagpieFSR PRIVATE "${MAGPIE_VULKAN_LIBRARY}")
+target_link_libraries(VkLayer_MagpieFSR PRIVATE
+    "${MAGPIE_VULKAN_LIBRARY}"
+    "${MAGPIE_LOG_LIBRARY}")
 target_compile_options(VkLayer_MagpieFSR PRIVATE -Wall -Wextra)
 
 # The controlled test application's renderer.
 find_library(MAGPIE_ANDROID_LIBRARY NAMES android REQUIRED)
-find_library(MAGPIE_LOG_LIBRARY NAMES log REQUIRED)
 add_library(magpie_test_renderer SHARED MagpieTestRenderer.cpp)
 add_dependencies(magpie_test_renderer magpie_test_shaders)
 target_include_directories(magpie_test_renderer PRIVATE ${MAGPIE_SHADER_DIR})
