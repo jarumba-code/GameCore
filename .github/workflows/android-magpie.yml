@@ -56,6 +56,15 @@ jobs:
           "$SDK_ROOT/cmake/$MAGPIE_CMAKE_VERSION/bin/cmake" --version
           "$SDK_ROOT/ndk/$MAGPIE_NDK_VERSION/toolchains/llvm/prebuilt/linux-x86_64/bin/clang++" --version
 
+      - name: Install GLSL front-end for shader compilation
+        run: |
+          # The NDK stopped shipping glslc (r25+). glslangValidator (apt glslang-tools) compiles
+          # the same GLSL to the same Vulkan 1.0 SPIR-V; the shaders declare the include
+          # directive extension it requires, and the CMake build prefers glslc when one exists.
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq glslang-tools
+          glslangValidator --version | head -2
+
       - name: Set up Gradle and dependency cache
         uses: gradle/actions/setup-gradle@v6
         with:
@@ -183,6 +192,15 @@ jobs:
         with:
           name: android-magpie-debug-apk-${{ github.sha }}
           path: app/build/outputs/apk/debug/app-debug.apk
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Upload instrumentation test APK artifact
+        if: always() && steps.package-check.outcome == 'success'
+        uses: actions/upload-artifact@v7
+        with:
+          name: android-magpie-android-test-apk-${{ github.sha }}
+          path: app/build/outputs/apk/androidTest/debug/app-debug-androidTest.apk
           if-no-files-found: error
           retention-days: 14
 

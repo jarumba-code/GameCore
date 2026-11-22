@@ -75,12 +75,18 @@ list(APPEND MAGPIE_GLSLC_CANDIDATES
     "/usr/local/lib/android/sdk/ndk/*/shader-tools/*/glslc")
 file(GLOB MAGPIE_GLSLC_CANDIDATES ${MAGPIE_GLSLC_CANDIDATES})
 find_program(MAGPIE_GLSLC_EXECUTABLE NAMES glslc HINTS ${MAGPIE_GLSLC_CANDIDATES})
-if(NOT MAGPIE_GLSLC_EXECUTABLE)
-    message(FATAL_ERROR
-        "glslc was not found; the FSR shaders cannot be compiled. Searched: "
-        "ANDROID_NDK_HOME='$ENV{ANDROID_NDK_HOME}' ANDROID_NDK_ROOT='$ENV{ANDROID_NDK_ROOT}' "
-        "ANDROID_NDK='${ANDROID_NDK}' CMAKE_ANDROID_NDK='${CMAKE_ANDROID_NDK}' "
-        "ANDROID_HOME='$ENV{ANDROID_HOME}', plus the GitHub-runner SDK path.")
+# The NDK stopped shipping glslc (r25+), so the host's glslangValidator is the fallback: it
+# compiles the same GLSL to the same Vulkan 1.0 SPIR-V, with the include directive declared in
+# the shader itself. One of the two must exist for the build to proceed.
+if(MAGPIE_GLSLC_EXECUTABLE)
+    set(MAGPIE_SHADER_COMPILER "${MAGPIE_GLSLC_EXECUTABLE}")
+    set(MAGPIE_SHADER_COMPILER_ARGS "")
+    message(STATUS "FSR shaders will be compiled with glslc: ${MAGPIE_GLSLC_EXECUTABLE}")
+else()
+    find_program(MAGPIE_GLSLANG_EXECUTABLE NAMES glslangValidator glslang REQUIRED)
+    set(MAGPIE_SHADER_COMPILER "${MAGPIE_GLSLANG_EXECUTABLE}")
+    set(MAGPIE_SHADER_COMPILER_ARGS "-V" "--target-env" "vulkan1.0")
+    message(STATUS "FSR shaders will be compiled with glslangValidator: ${MAGPIE_GLSLANG_EXECUTABLE}")
 endif()
 set(MAGPIE_SHADER_DIR ${CMAKE_CURRENT_BINARY_DIR}/shaders)
 file(MAKE_DIRECTORY ${MAGPIE_SHADER_DIR})
@@ -89,7 +95,8 @@ set(MAGPIE_AMD_ROOT ${MAGPIE_ROOT}/third_party/amd-fsr1)
 foreach(shader IN ITEMS easu rcas)
     add_custom_command(
         OUTPUT ${MAGPIE_SHADER_DIR}/${shader}.spv
-        COMMAND ${MAGPIE_GLSLC_EXECUTABLE} -I${MAGPIE_AMD_ROOT}
+        COMMAND ${MAGPIE_SHADER_COMPILER} ${MAGPIE_SHADER_COMPILER_ARGS}
+                -I${MAGPIE_AMD_ROOT}
                 ${MAGPIE_SHADER_ROOT}/${shader}.comp -o ${MAGPIE_SHADER_DIR}/${shader}.spv
         DEPENDS ${MAGPIE_SHADER_ROOT}/${shader}.comp
                 ${MAGPIE_AMD_ROOT}/ffx_a.h

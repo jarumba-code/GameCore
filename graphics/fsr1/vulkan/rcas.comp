@@ -2,6 +2,9 @@
 // AMD FidelityFX FSR 1.0.2 routines, pinned at a21ffb8f6c13233ba336352bdff293894c706575.
 // Copyright (c) 2021 Advanced Micro Devices, Inc. See third_party/amd-fsr1/LICENSE.txt.
 #define A_GPU 1
+// The include directive is declared explicitly so the shader compiles under both glslc
+// (which enables it implicitly) and glslangValidator (which requires the declaration).
+#extension GL_GOOGLE_include_directive : enable
 #define A_GLSL 1
 #define FSR_RCAS_F 1
 #include "ffx_a.h"
