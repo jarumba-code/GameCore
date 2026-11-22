@@ -98,11 +98,10 @@ struct Renderer {
         ici.pApplicationInfo = &app;
         ici.enabledLayerCount = static_cast<uint32_t>(layers.size());
         ici.ppEnabledLayerNames = layers.data();
-        const char* surfaceExt = "VK_KHR_android_surface";
+        const char* surfaceExts[] = {"VK_KHR_surface", "VK_KHR_android_surface"};
         const char* swapchainExt = "VK_KHR_swapchain";
-        const char* instanceExts[] = {surfaceExt};
-        ici.enabledExtensionCount = 1;
-        ici.ppEnabledExtensionNames = instanceExts;
+        ici.enabledExtensionCount = 2;
+        ici.ppEnabledExtensionNames = surfaceExts;
         if (vkCreateInstance(&ici, nullptr, &instance) != VK_SUCCESS) {
             LOGE("vkCreateInstance failed");
             return false;
@@ -128,6 +127,35 @@ struct Renderer {
         std::vector<VkPhysicalDevice> physicals(physicalCount);
         vkEnumeratePhysicalDevices(instance, &physicalCount, physicals.data());
         physical = physicals[0];
+
+        // The layer's EASU/RCAS storage images and copy path are RGBA8_UNORM. Do not
+        // silently create an incompatible BGRA or sRGB swapchain on devices that lack it.
+        uint32_t surfaceFormatCount = 0;
+        if (vkGetPhysicalDeviceSurfaceFormatsKHR(physical, surface, &surfaceFormatCount, nullptr) != VK_SUCCESS ||
+            surfaceFormatCount == 0) {
+            LOGE("surface format query failed or returned no formats");
+            return false;
+        }
+        std::vector<VkSurfaceFormatKHR> surfaceFormats(surfaceFormatCount);
+        if (vkGetPhysicalDeviceSurfaceFormatsKHR(physical, surface, &surfaceFormatCount,
+                                                 surfaceFormats.data()) != VK_SUCCESS) {
+            LOGE("surface format enumeration failed");
+            return false;
+        }
+        bool formatSupported = false;
+        for (const auto& candidate : surfaceFormats) {
+            if (candidate.colorSpace == VK_COLOR_SPACE_SRGB_NONLINEAR_KHR &&
+                (candidate.format == VK_FORMAT_R8G8B8A8_UNORM ||
+                 candidate.format == VK_FORMAT_UNDEFINED)) {
+                format = VK_FORMAT_R8G8B8A8_UNORM;
+                formatSupported = true;
+                break;
+            }
+        }
+        if (!formatSupported) {
+            LOGE("device surface does not expose RGBA8_UNORM with SRGB_NONLINEAR color space");
+            return false;
+        }
 
         uint32_t familyCount = 0;
         vkGetPhysicalDeviceQueueFamilyProperties(physical, &familyCount, nullptr);
@@ -213,16 +241,41 @@ struct Renderer {
         sci.sType = VK_STRUCTURE_TYPE_SWAPCHAIN_CREATE_INFO_KHR;
         sci.surface = surface;
         sci.minImageCount = std::max(3u, caps.minImageCount);
+        if (caps.maxImageCount > 0)
+            sci.minImageCount = std::min(sci.minImageCount, caps.maxImageCount);
         sci.imageFormat = format;
         sci.imageColorSpace = VK_COLOR_SPACE_SRGB_NONLINEAR_KHR;
         // Android's fixed surface extent remains native. The layer substitutes smaller images;
         // this controlled renderer sizes its framebuffer, viewport and scissor to the fake image.
         sci.imageExtent = surfaceExtent;
         sci.imageArrayLayers = 1;
+        if ((caps.supportedUsageFlags & VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT) == 0) {
+            LOGE("surface does not support color-attachment swapchain images");
+            return false;
+        }
         sci.imageUsage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT;
         sci.imageSharingMode = VK_SHARING_MODE_EXCLUSIVE;
         sci.preTransform = caps.currentTransform;
         sci.compositeAlpha = VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR;
+        if ((caps.supportedCompositeAlpha & sci.compositeAlpha) == 0) {
+            const VkCompositeAlphaFlagBitsKHR alphaChoices[] = {
+                VK_COMPOSITE_ALPHA_PRE_MULTIPLIED_BIT_KHR,
+                VK_COMPOSITE_ALPHA_POST_MULTIPLIED_BIT_KHR,
+                VK_COMPOSITE_ALPHA_INHERIT_BIT_KHR
+            };
+            bool alphaFound = false;
+            for (const auto candidate : alphaChoices) {
+                if (caps.supportedCompositeAlpha & candidate) {
+                    sci.compositeAlpha = candidate;
+                    alphaFound = true;
+                    break;
+                }
+            }
+            if (!alphaFound) {
+                LOGE("surface exposes no supported composite-alpha mode");
+                return false;
+            }
+        }
         sci.presentMode = VK_PRESENT_MODE_FIFO_KHR;  // vsync; the honest pacing source
         sci.clipped = VK_TRUE;
         sci.oldSwapchain = swapchain;
