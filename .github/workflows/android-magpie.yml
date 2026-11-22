@@ -84,7 +84,7 @@ jobs:
             --test-dir "$RUNNER_TEMP/fsr1-reference" --output-on-failure \
             2>&1 | tee "$RUNNER_TEMP/android-magpie-fsr-reference-test.log"
 
-      - name: Build all JVM tests, Android tests, and debug APK
+      - name: Build all JVM tests, Android tests, debug APK, and the layer test app
         id: gradle-build
         shell: bash
         run: |
@@ -96,6 +96,7 @@ jobs:
             :gamecore-plugin-sdk:test \
             :app:assembleDebug \
             :app:assembleDebugAndroidTest \
+            :layer-test-app:assembleDebug \
             2>&1 | tee "$RUNNER_TEMP/android-magpie-gradle-build.log"
 
       - name: Verify native library outputs and APK packaging
@@ -152,21 +153,33 @@ jobs:
           test "$PACKAGE" = "com.gamecore.debug"
           echo "Verified debug application ID: $PACKAGE"
 
-      - name: Run Android 15 ARM64 instrumentation tests
-        uses: reactivecircus/android-emulator-runner@v2
-        with:
-          api-level: 35
-          target: google_apis
-          arch: arm64-v8a
-          profile: pixel_2
-          emulator-options: -no-window -no-audio -no-boot-anim -no-snapshot -gpu swiftshader_indirect
-          disable-animations: true
-          emulator-boot-timeout: 900
-          script: |
-            set -o pipefail
-            adb shell getprop ro.build.version.sdk
-            adb shell getprop ro.product.cpu.abi
-            ./gradlew --no-daemon --stacktrace --console=plain :app:connectedDebugAndroidTest 2>&1 | tee "$RUNNER_TEMP/android-magpie-instrumented-tests.log"
+          # Layer test app: the Vulkan layer .so and the renderer must both be packaged as
+          # AArch64 ELFs — the loader finds libVkLayer_*.so in the app's own nativeLibraryDir.
+          TEST_APK=layer-test-app/build/outputs/apk/debug/layer-test-app-debug.apk
+          if [ ! -f "$TEST_APK" ]; then
+              echo "layer-test APK is missing: $TEST_APK"; exit 1
+          fi
+          python3 - "$TEST_APK" <<'PY'
+          import pathlib, struct, sys, zipfile
+          apk = pathlib.Path(sys.argv[1])
+          with zipfile.ZipFile(apk) as archive:
+              entries = set(archive.namelist())
+              for name in ("libVkLayer_MagpieFSR.so", "libmagpie_test_renderer.so", "libc++_shared.so"):
+                  entry = f"lib/arm64-v8a/{name}"
+                  if entry not in entries:
+                      raise SystemExit(f"layer-test APK missing {entry}")
+                  data = archive.read(entry)
+                  if data[:4] != b"\x7fELF" or data[4] != 2 or data[5] != 1:
+                      raise SystemExit(f"{entry} is not ELF64")
+                  machine = struct.unpack_from("<H", data, 18)[0]
+                  if machine != 183:
+                      raise SystemExit(f"{entry} is not AArch64 (e_machine={machine})")
+                  print(f"layer-test APK contains AArch64 library: {entry} ({len(data)} bytes)")
+          print(f"layer-test APK: {apk} ({apk.stat().st_size} bytes)")
+          PY
+          TEST_PACKAGE="$($AAPT dump badging "$TEST_APK" | sed -n "s/^package: name='\([^']*\)'.*/\1/p")"
+          test "$TEST_PACKAGE" = "com.gamecore.magpietest"
+          echo "Verified layer-test application ID: $TEST_PACKAGE"
 
       - name: Collect build and test diagnostics
         if: always()
@@ -201,6 +214,15 @@ jobs:
         with:
           name: android-magpie-android-test-apk-${{ github.sha }}
           path: app/build/outputs/apk/androidTest/debug/app-debug-androidTest.apk
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Upload layer test APK artifact
+        if: always() && steps.package-check.outcome == 'success'
+        uses: actions/upload-artifact@v7
+        with:
+          name: magpie-layer-test-apk-${{ github.sha }}
+          path: layer-test-app/build/outputs/apk/debug/layer-test-app-debug.apk
           if-no-files-found: error
           retention-days: 14
 

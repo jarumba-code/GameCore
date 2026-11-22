@@ -31,6 +31,7 @@ rootProject.name = "GameCore"
 // built on an on-device ARM host with roughly 1.5 GB of usable heap and no Gradle
 // daemon. One module builds; five modules run out of metaspace.
 include(":app")
+include(":layer-test-app")
 
 // The one exception, and a cheap one. gamecore-plugin-sdk is a pure Kotlin/JVM module with no
 // Android, KSP, Hilt or Compose plugins — it is a build-time tool for authoring .gcplugin
