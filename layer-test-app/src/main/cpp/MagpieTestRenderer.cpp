@@ -54,7 +54,7 @@ VkExtent2D renderExtent(VkExtent2D nativeExtent, bool layerEnabled) {
 
 struct FrameSync {
     VkSemaphore imageAvailable = VK_NULL_HANDLE;
-    VkSemaphore renderDone = VK_NULL_HANDLE;
+    VkFence inFlight = VK_NULL_HANDLE;
 };
 
 struct Renderer {
@@ -83,6 +83,7 @@ struct Renderer {
     std::vector<VkFramebuffer> framebuffers;
     std::vector<VkImageView> imageViews;
     std::vector<FrameSync> sync;  // per-frame-in-flight (2)
+    std::vector<VkSemaphore> renderDoneByImage;  // presentation waits, reused only after reacquire
     uint32_t frameIndex = 0;
     std::chrono::steady_clock::time_point startedAt{};
     uint64_t frames = 0;
@@ -207,6 +208,9 @@ struct Renderer {
     }
 
     bool createSwapchainObjects() {
+        // Rebuild only after prior graphics and presentation work has completed. This also
+        // makes it safe to retire the old swapchain's image views and per-image present semaphores.
+        if (swapchain != VK_NULL_HANDLE) vkDeviceWaitIdle(device);
         const auto capsFn = reinterpret_cast<PFN_vkGetPhysicalDeviceSurfaceCapabilitiesKHR>(
             vkGetInstanceProcAddr(instance, "vkGetPhysicalDeviceSurfaceCapabilitiesKHR"));
         VkSurfaceCapabilitiesKHR caps{};
@@ -236,6 +240,13 @@ struct Renderer {
             return false;
         }
         if (old != VK_NULL_HANDLE) {
+            for (VkFramebuffer fb : framebuffers) vkDestroyFramebuffer(device, fb, nullptr);
+            for (VkImageView iv : imageViews) vkDestroyImageView(device, iv, nullptr);
+            framebuffers.clear();
+            imageViews.clear();
+            for (VkSemaphore sem : renderDoneByImage)
+                vkDestroySemaphore(device, sem, nullptr);
+            renderDoneByImage.clear();
             vkDestroySwapchainKHR(device, old, nullptr);
             recreated++;
         }
@@ -247,13 +258,14 @@ struct Renderer {
         LOGI("swapchain images: count=%u surface=%ux%u render=%ux%u",
              imageCount, surfaceExtent.width, surfaceExtent.height, extent.width, extent.height);
 
-        if (old != VK_NULL_HANDLE) {
-            for (VkFramebuffer fb : framebuffers)
-                vkDestroyFramebuffer(device, fb, nullptr);
-            for (VkImageView iv : imageViews)
-                vkDestroyImageView(device, iv, nullptr);
-            framebuffers.clear();
-            imageViews.clear();
+        renderDoneByImage.resize(imageCount, VK_NULL_HANDLE);
+        for (uint32_t i = 0; i < imageCount; ++i) {
+            VkSemaphoreCreateInfo semaphoreInfo{};
+            semaphoreInfo.sType = VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO;
+            if (vkCreateSemaphore(device, &semaphoreInfo, nullptr, &renderDoneByImage[i]) != VK_SUCCESS) {
+                LOGE("per-image render-finished semaphore creation failed at image %u", i);
+                return false;
+            }
         }
         imageViews.resize(imageCount);
         for (uint32_t i = 0; i < imageCount; ++i) {
@@ -399,8 +411,13 @@ struct Renderer {
         for (auto& s : sync) {
             VkSemaphoreCreateInfo sci{};
             sci.sType = VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO;
-            vkCreateSemaphore(device, &sci, nullptr, &s.imageAvailable);
-            vkCreateSemaphore(device, &sci, nullptr, &s.renderDone);
+            if (vkCreateSemaphore(device, &sci, nullptr, &s.imageAvailable) != VK_SUCCESS)
+                return false;
+            VkFenceCreateInfo fci{};
+            fci.sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO;
+            fci.flags = VK_FENCE_CREATE_SIGNALED_BIT;
+            if (vkCreateFence(device, &fci, nullptr, &s.inFlight) != VK_SUCCESS)
+                return false;
         }
         return true;
     }
@@ -408,6 +425,7 @@ struct Renderer {
     void renderFrame(double seconds) {
         uint32_t imageIndex = 0;
         FrameSync& s = sync[frameIndex % 2];
+        vkWaitForFences(device, 1, &s.inFlight, VK_TRUE, UINT64_MAX);
         VkResult acquire = vkAcquireNextImageKHR(device, swapchain, UINT64_MAX,
                                                  s.imageAvailable, VK_NULL_HANDLE, &imageIndex);
         if (acquire == VK_ERROR_OUT_OF_DATE_KHR || acquire == VK_SUBOPTIMAL_KHR) {
@@ -449,13 +467,17 @@ struct Renderer {
         si.commandBufferCount = 1;
         si.pCommandBuffers = &cb;
         si.signalSemaphoreCount = 1;
-        si.pSignalSemaphores = &s.renderDone;
-        vkQueueSubmit(queue, 1, &si, VK_NULL_HANDLE);
+        si.pSignalSemaphores = &renderDoneByImage[imageIndex];
+        vkResetFences(device, 1, &s.inFlight);
+        if (vkQueueSubmit(queue, 1, &si, s.inFlight) != VK_SUCCESS) {
+            LOGE("graphics queue submission failed");
+            return;
+        }
 
         VkPresentInfoKHR pi{};
         pi.sType = VK_STRUCTURE_TYPE_PRESENT_INFO_KHR;
         pi.waitSemaphoreCount = 1;
-        pi.pWaitSemaphores = &s.renderDone;
+        pi.pWaitSemaphores = &renderDoneByImage[imageIndex];
         pi.swapchainCount = 1;
         pi.pSwapchains = &swapchain;
         pi.pImageIndices = &imageIndex;
@@ -482,10 +504,13 @@ struct Renderer {
         if (device != VK_NULL_HANDLE) {
             vkDeviceWaitIdle(device);
             for (auto& s : sync) {
-                vkDestroySemaphore(device, s.imageAvailable, nullptr);
-                vkDestroySemaphore(device, s.renderDone, nullptr);
+                if (s.imageAvailable) vkDestroySemaphore(device, s.imageAvailable, nullptr);
+                if (s.inFlight) vkDestroyFence(device, s.inFlight, nullptr);
             }
             sync.clear();
+            for (VkSemaphore sem : renderDoneByImage)
+                if (sem) vkDestroySemaphore(device, sem, nullptr);
+            renderDoneByImage.clear();
             for (VkFramebuffer fb : framebuffers) vkDestroyFramebuffer(device, fb, nullptr);
             for (VkImageView iv : imageViews) vkDestroyImageView(device, iv, nullptr);
             framebuffers.clear();
