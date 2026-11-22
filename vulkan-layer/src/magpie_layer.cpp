@@ -43,6 +43,7 @@
 #define LOGE(...) __android_log_print(ANDROID_LOG_ERROR, "MagpieLayer", __VA_ARGS__)
 
 static const char* MAGPIE_LAYER_NAME = "VK_LAYER_MAGPIE_FSR1";
+static const char* MAGPIE_CONTROL_EXTENSION_NAME = "VK_MAGPIE_layer_control";
 static const char* MAGPIE_SCALE_PROP = "debug.magpie.scale";
 static const char* MAGPIE_FSR_PROP = "debug.magpie.fsr";
 static constexpr float MAGPIE_DEFAULT_SCALE = 0.5f;
@@ -126,6 +127,7 @@ struct DeviceData {
     // Default for applications that treat substituted images like swapchain images. The
     // controlled test app opts into GENERAL because its layer-owned images are not presentable.
     VkImageLayout fakeFinalLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
+    bool controlExtensionEnabled = false;
 
     std::unordered_map<VkSwapchainKHR, Substitution> substitutions;
     std::unordered_map<VkQueue, uint32_t> queueFamilies;
@@ -402,8 +404,21 @@ magpie_EnumerateDeviceExtensionProperties(VkPhysicalDevice, const char* pLayerNa
     if (pLayerName && std::strcmp(pLayerName, MAGPIE_LAYER_NAME) != 0)
         return VK_ERROR_LAYER_NOT_PRESENT;
     if (!pCount) return VK_ERROR_INITIALIZATION_FAILED;
-    *pCount = 0;
-    (void)pProperties;
+    if (!pLayerName) {
+        *pCount = 0;
+        return VK_SUCCESS;
+    }
+    if (!pProperties) {
+        *pCount = 1;
+        return VK_SUCCESS;
+    }
+    if (*pCount == 0) return VK_INCOMPLETE;
+    VkExtensionProperties property{};
+    std::strncpy(property.extensionName, MAGPIE_CONTROL_EXTENSION_NAME,
+                 VK_MAX_EXTENSION_NAME_SIZE - 1);
+    property.specVersion = 1;
+    pProperties[0] = property;
+    *pCount = 1;
     return VK_SUCCESS;
 }
 
@@ -536,7 +551,25 @@ magpie_CreateDevice(VkPhysicalDevice physical, const VkDeviceCreateInfo* pCreate
     const auto createDevice =
         reinterpret_cast<PFN_vkCreateDevice>(gpiA_next(instance, "vkCreateDevice"));
     if (!createDevice) return VK_ERROR_INITIALIZATION_FAILED;
-    const VkResult result = createDevice(physical, pCreateInfo, pAllocator, pDevice);
+
+    bool controlExtensionEnabled = false;
+    std::vector<const char*> forwardedExtensions;
+    forwardedExtensions.reserve(pCreateInfo->enabledExtensionCount);
+    for (uint32_t i = 0; i < pCreateInfo->enabledExtensionCount; ++i) {
+        const char* extensionName = pCreateInfo->ppEnabledExtensionNames[i];
+        if (std::strcmp(extensionName, MAGPIE_CONTROL_EXTENSION_NAME) == 0) {
+            controlExtensionEnabled = true;
+        } else {
+            forwardedExtensions.push_back(extensionName);
+        }
+    }
+    VkDeviceCreateInfo forwardedCreateInfo = *pCreateInfo;
+    forwardedCreateInfo.enabledExtensionCount =
+        static_cast<uint32_t>(forwardedExtensions.size());
+    forwardedCreateInfo.ppEnabledExtensionNames =
+        forwardedExtensions.empty() ? nullptr : forwardedExtensions.data();
+    const VkResult result =
+        createDevice(physical, &forwardedCreateInfo, pAllocator, pDevice);
     if (result != VK_SUCCESS) return result;
 
     auto* data = new DeviceData();
@@ -545,6 +578,7 @@ magpie_CreateDevice(VkPhysicalDevice physical, const VkDeviceCreateInfo* pCreate
     data->device = *pDevice;
     data->instance = instance;
     data->physical = physical;
+    data->controlExtensionEnabled = controlExtensionEnabled;
     const auto props = reinterpret_cast<PFN_vkGetPhysicalDeviceProperties>(
         gpiA_next(instance, "vkGetPhysicalDeviceProperties"));
     if (props) {
@@ -1468,10 +1502,14 @@ magpie_GetDeviceProcAddr(VkDevice device, const char* name) {
     if (!name) return nullptr;
     if (strcmp(name, "vkGetDeviceProcAddr") == 0)
         return reinterpret_cast<void*>(&magpie_GetDeviceProcAddr);
-    if (strcmp(name, "vkMagpieSetFakeImageFinalLayout") == 0)
-        return reinterpret_cast<void*>(&magpie_SetFakeImageFinalLayout);
-    if (strcmp(name, "vkMagpieGetSwapchainRenderExtent") == 0)
+    if (strcmp(name, "vkMagpieSetFakeImageFinalLayout") == 0 ||
+        strcmp(name, "vkMagpieGetSwapchainRenderExtent") == 0) {
+        auto* d = deviceData(device);
+        if (!d || !d->controlExtensionEnabled) return nullptr;
+        if (strcmp(name, "vkMagpieSetFakeImageFinalLayout") == 0)
+            return reinterpret_cast<void*>(&magpie_SetFakeImageFinalLayout);
         return reinterpret_cast<void*>(&magpie_GetSwapchainRenderExtent);
+    }
     if (strcmp(name, "vkDestroyDevice") == 0)
         return reinterpret_cast<void*>(&magpie_DestroyDevice);
     if (strcmp(name, "vkGetDeviceQueue") == 0)
