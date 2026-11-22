@@ -82,8 +82,13 @@ class SfDumpParsersTest {
         assertEquals(124, stats.frameCount)
         assertEquals(0.033_320 * 1_000, stats.medianDeltaNanos / 1e6, 0.01)
         assertTrue("the game paces at half refresh", stats.isHalfRefreshPaced())
-        // The sentinel row (Long.MAX_VALUE) is excluded from every statistic.
-        assertTrue(stats.p99DeltaNanos <= 60_000_000L)
+        // The sentinel rows are excluded from every statistic; the only p99 elevation they can
+        // cause is one two-period delta per skipped row (the row between two real presents is
+        // absent), so anything at or beyond three periods would mean a sentinel leaked in.
+        assertTrue(
+            "p99 must stay within two present periods + jitter, got ${stats.p99DeltaNanos / 1e6} ms",
+            stats.p99DeltaNanos <= 3L * 33_320_000L,
+        )
     }
 
     @Test
