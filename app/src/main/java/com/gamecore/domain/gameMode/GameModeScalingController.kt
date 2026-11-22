@@ -101,7 +101,7 @@ class GameModeScalingController @Inject constructor(
             if (parsed == null) {
                 Observed.Failed("The Game Manager output could not be parsed.")
             } else {
-                Observed.of(parsed, com.gamecore.core.system.DataSource.DUMPSYS_SHIZUKU)
+                Observed.of(parsed, DataSource.DUMPSYS_SHIZUKU)
             }
         }
 

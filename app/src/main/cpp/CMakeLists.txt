@@ -42,12 +42,40 @@ target_compile_options(magpie_vulkan PRIVATE -Wall -Wextra -Wpedantic)
 # NDK's own glslc and embedded as C arrays, so the engine never compiles GLSL at
 # runtime and the pinned vendored sources stay the single origin of the shipped
 # SPIR-V. The compile inputs match the M2 harness exactly (same -I, same files).
-file(GLOB MAGPIE_GLSLC_CANDIDATES
-    "${ANDROID_NDK}/toolchains/llvm/prebuilt/*/bin/glslc"
-    "${ANDROID_NDK}/toolchains/llvm/prebuilt/*/bin/glslc.exe")
+#
+# glslc discovery deliberately searches every root a build can plausibly have:
+# the ANDROID_NDK_HOME / ANDROID_NDK_ROOT environment variables the wrapper
+# scripts set, the toolchain file's own ANDROID_NDK / CMAKE_ANDROID_NDK values,
+# the ANDROID_HOME ndk directory, and the GitHub-runner SDK layout. A build that
+# cannot find glslc fails with the list of what was searched, not a bare error.
+set(MAGPIE_GLSLC_CANDIDATES "")
+foreach(magpie_ndk_root IN ITEMS
+        "$ENV{ANDROID_NDK_HOME}"
+        "$ENV{ANDROID_NDK_ROOT}"
+        "${ANDROID_NDK}"
+        "${CMAKE_ANDROID_NDK}")
+    if(magpie_ndk_root)
+        list(APPEND MAGPIE_GLSLC_CANDIDATES
+            "${magpie_ndk_root}/toolchains/llvm/prebuilt/*/bin/glslc"
+            "${magpie_ndk_root}/toolchains/llvm/prebuilt/*/bin/glslc.exe")
+    endif()
+endforeach()
+if(DEFINED ENV{ANDROID_HOME})
+    list(APPEND MAGPIE_GLSLC_CANDIDATES
+        "$ENV{ANDROID_HOME}/ndk/*/toolchains/llvm/prebuilt/*/bin/glslc"
+        "$ENV{ANDROID_HOME}/ndk/*/toolchains/llvm/prebuilt/*/bin/glslc.exe")
+endif()
+# The GitHub-hosted runner's SDK location, where the workflow installs the NDK.
+list(APPEND MAGPIE_GLSLC_CANDIDATES
+    "/usr/local/lib/android/sdk/ndk/*/toolchains/llvm/prebuilt/*/bin/glslc")
+file(GLOB MAGPIE_GLSLC_CANDIDATES ${MAGPIE_GLSLC_CANDIDATES})
 find_program(MAGPIE_GLSLC_EXECUTABLE NAMES glslc HINTS ${MAGPIE_GLSLC_CANDIDATES})
 if(NOT MAGPIE_GLSLC_EXECUTABLE)
-    message(FATAL_ERROR "glslc was not found in the NDK toolchain; the FSR shaders cannot be compiled")
+    message(FATAL_ERROR
+        "glslc was not found; the FSR shaders cannot be compiled. Searched: "
+        "ANDROID_NDK_HOME='$ENV{ANDROID_NDK_HOME}' ANDROID_NDK_ROOT='$ENV{ANDROID_NDK_ROOT}' "
+        "ANDROID_NDK='${ANDROID_NDK}' CMAKE_ANDROID_NDK='${CMAKE_ANDROID_NDK}' "
+        "ANDROID_HOME='$ENV{ANDROID_HOME}', plus the GitHub-runner SDK path.")
 endif()
 set(MAGPIE_SHADER_DIR ${CMAKE_CURRENT_BINARY_DIR}/shaders)
 file(MAKE_DIRECTORY ${MAGPIE_SHADER_DIR})

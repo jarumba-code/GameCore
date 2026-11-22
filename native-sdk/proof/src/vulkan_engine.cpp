@@ -531,6 +531,10 @@ struct MagpieVulkanFsrEngineV1 {
         vkUnmapMemory(device, upload.mem);
 
         if (vkResetFences(device, 1, &fence) != VK_SUCCESS) return MAGPIE_INTERNAL_ERROR;
+        // The pool was created with RESET_COMMAND_BUFFER_BIT, so a completed buffer resets
+        // implicitly at begin — but a *previously failed* begin can leave state that a fresh
+        // begin would reject. An explicit reset makes the failure path survivable.
+        vkResetCommandBuffer(command, VK_COMMAND_BUFFER_RESET_RELEASE_RESOURCES_BIT);
         VkCommandBufferBeginInfo bi{};
         bi.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
         bi.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;

@@ -5,11 +5,11 @@ import android.content.Intent
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.gamecore.core.common.IoDispatcher
+import com.gamecore.core.common.valueOrNull
 import com.gamecore.core.model.GameModeFeatureSupport
 import com.gamecore.core.model.GameModeIntervention
 import com.gamecore.core.model.GameModeScale
 import com.gamecore.core.model.GameModeScalingVerdict
-import com.gamecore.core.system.valueOrNull
 import com.gamecore.data.repository.GameProfileRepository
 import com.gamecore.data.repository.GameScalingProfile
 import com.gamecore.data.repository.GameScalingProfileRepository
