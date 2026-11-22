@@ -323,9 +323,15 @@ static const VkLayerProperties MAGPIE_LAYER_PROPERTIES = {
 
 extern "C" VKAPI_ATTR VkResult VKAPI_CALL
 magpie_EnumerateInstanceLayerProperties(uint32_t* pPropertyCount, VkLayerProperties* pProperties) {
-    if (pPropertyCount) *pPropertyCount = 1;
-    if (pProperties) pProperties[0] = MAGPIE_LAYER_PROPERTIES;
-    return pProperties ? VK_SUCCESS : VK_INCOMPLETE;
+    if (!pPropertyCount) return VK_ERROR_INITIALIZATION_FAILED;
+    if (!pProperties) {
+        *pPropertyCount = 1;
+        return VK_SUCCESS;
+    }
+    if (*pPropertyCount == 0) return VK_INCOMPLETE;
+    pProperties[0] = MAGPIE_LAYER_PROPERTIES;
+    *pPropertyCount = 1;
+    return VK_SUCCESS;
 }
 
 extern "C" VKAPI_ATTR VkResult VKAPI_CALL
@@ -1077,6 +1083,8 @@ magpie_QueuePresentKHR(VkQueue queue, const VkPresentInfoKHR* pPresentInfo) {
         const auto writeTimestamp = deviceProc<PFN_vkCmdWriteTimestamp>(d, "vkCmdWriteTimestamp");
         const auto resetQueryPool = deviceProc<PFN_vkCmdResetQueryPool>(d, "vkCmdResetQueryPool");
         const auto getQueryResults = deviceProc<PFN_vkGetQueryPoolResults>(d, "vkGetQueryPoolResults");
+        const auto updateDescriptorSets =
+            deviceProc<PFN_vkUpdateDescriptorSets>(d, "vkUpdateDescriptorSets");
         const auto cmdCopyImage = deviceProc<PFN_vkCmdCopyImage>(d, "vkCmdCopyImage");
         const auto cmdBlitImage = deviceProc<PFN_vkCmdBlitImage>(d, "vkCmdBlitImage");
 
@@ -1119,6 +1127,20 @@ magpie_QueuePresentKHR(VkQueue queue, const VkPresentInfoKHR* pPresentInfo) {
                 return present(queue, pPresentInfo);
             }
             d->commandPending = false;
+        }
+        // EASU must sample the image acquired for this frame, not always fake[0]. The previous
+        // layer submission is complete (fence above), so updating this descriptor is safe.
+        if (sub->mode == Mode::FSR) {
+            VkDescriptorImageInfo inputInfo{
+                d->sampler, sub->fake[index].view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
+            VkWriteDescriptorSet inputWrite{};
+            inputWrite.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+            inputWrite.dstSet = sub->easuSet;
+            inputWrite.dstBinding = 0;
+            inputWrite.descriptorCount = 1;
+            inputWrite.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+            inputWrite.pImageInfo = &inputInfo;
+            updateDescriptorSets(d->device, 1, &inputWrite, 0, nullptr);
         }
         resetCb(d->command, VK_COMMAND_BUFFER_RESET_RELEASE_RESOURCES_BIT);
         VkCommandBufferBeginInfo bi{};
