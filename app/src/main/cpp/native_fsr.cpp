@@ -204,7 +204,7 @@ Java_com_gamecore_ui_graphics_FsrNative_vulkanFsrProcess(JNIEnv* env, jclass, jl
 }
 
 extern "C" JNIEXPORT jstring JNICALL
-Java_com_gamecore_ui_graphics_FsrNative_vulkanFsrResize(JNIEnv*, jclass, jlong handle, jint inW,
+Java_com_gamecore_ui_graphics_FsrNative_vulkanFsrResize(JNIEnv* env, jclass, jlong handle, jint inW,
                                                         jint inH, jint outW, jint outH) {
     auto* engine = reinterpret_cast<MagpieVulkanFsrEngineV1*>(static_cast<uintptr_t>(handle));
     if (!engine) return env->NewStringUTF("FSR engine handle is null");
