@@ -186,13 +186,42 @@ struct Renderer {
         qci.queueFamilyIndex = graphicsFamily;
         qci.queueCount = 1;
         qci.pQueuePriorities = &priority;
-        const char* deviceExts[] = {swapchainExt};
+        std::vector<const char*> deviceExts = {swapchainExt};
+        if (layerEnabled) {
+            const char* magpieControlExt = "VK_MAGPIE_layer_control";
+            uint32_t layerDeviceExtCount = 0;
+            if (vkEnumerateDeviceExtensionProperties(
+                    physical, "VK_LAYER_MAGPIE_FSR1", &layerDeviceExtCount, nullptr) != VK_SUCCESS ||
+                layerDeviceExtCount == 0) {
+                LOGE("Magpie control device extension is not exposed by the enabled layer");
+                return false;
+            }
+            std::vector<VkExtensionProperties> layerDeviceExts(layerDeviceExtCount);
+            if (vkEnumerateDeviceExtensionProperties(
+                    physical, "VK_LAYER_MAGPIE_FSR1", &layerDeviceExtCount,
+                    layerDeviceExts.data()) != VK_SUCCESS) {
+                LOGE("Magpie control device extension enumeration failed");
+                return false;
+            }
+            bool foundControlExt = false;
+            for (const auto& extension : layerDeviceExts) {
+                if (std::strcmp(extension.extensionName, magpieControlExt) == 0) {
+                    foundControlExt = true;
+                    break;
+                }
+            }
+            if (!foundControlExt) {
+                LOGE("Magpie control device extension was not advertised");
+                return false;
+            }
+            deviceExts.push_back(magpieControlExt);
+        }
         VkDeviceCreateInfo dci{};
         dci.sType = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO;
         dci.queueCreateInfoCount = 1;
         dci.pQueueCreateInfos = &qci;
-        dci.enabledExtensionCount = 1;
-        dci.ppEnabledExtensionNames = deviceExts;
+        dci.enabledExtensionCount = static_cast<uint32_t>(deviceExts.size());
+        dci.ppEnabledExtensionNames = deviceExts.data();
         if (vkCreateDevice(physical, &dci, nullptr, &device) != VK_SUCCESS) {
             LOGE("vkCreateDevice failed");
             return false;
