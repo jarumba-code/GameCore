@@ -6,7 +6,7 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_POSITION_INDEPENDENT_CODE ON)
 
 set(MAGPIE_ROOT ${CMAKE_CURRENT_SOURCE_DIR}/../../../../)
-set(MAGPIE_AMD_ROOT ${MAGPIE_ROOT}/third_party/amd-fsr1
+set(MAGPIE_AMD_ROOT ${MAGPIE_ROOT}/third_party/amd-fsr1)
 
 # GLSL front end: prefer glslc when an NDK ships one (r24-), otherwise glslangValidator
 # (installed by the CI workflow; same Vulkan 1.0 SPIR-V). One shared resolver for all shaders.
