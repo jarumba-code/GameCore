@@ -830,9 +830,9 @@ magpie_CreateSwapchainKHR(VkDevice device, const VkSwapchainCreateInfoKHR* pCrea
     // samples them (SAMPLED). If SAMPLED is unsupported at this size, fall back to blit, where
     // the fake image is instead a blit SOURCE (TRANSFER_SRC). If even that fails, L3 passthrough.
     VkImageUsageFlags fakeUsage =
-        pCreateInfo->imageUsage | VK_IMAGE_USAGE_SAMPLED | VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
+        pCreateInfo->imageUsage | VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
     if (mode == Mode::BLIT) {
-        fakeUsage = (pCreateInfo->imageUsage | VK_IMAGE_USAGE_TRANSFER_SRC) & ~VK_IMAGE_USAGE_SAMPLED;
+        fakeUsage = (pCreateInfo->imageUsage | VK_IMAGE_USAGE_TRANSFER_SRC_BIT) & ~VK_IMAGE_USAGE_SAMPLED;
     }
     auto create = deviceProc<PFN_vkCreateImage>(d, "vkCreateImage");
     auto allocate = deviceProc<PFN_vkAllocateMemory>(d, "vkAllocateMemory");
@@ -1456,7 +1456,7 @@ magpie_QueuePresentKHR(VkQueue queue, const VkPresentInfoKHR* pPresentInfo) {
                       VK_IMAGE_LAYOUT_PRESENT_SRC_KHR, VK_ACCESS_TRANSFER_WRITE_BIT, 0,
                       VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT,
                       barrier);
-        if (end(d->command, &bi) != VK_SUCCESS) {
+        if (end(d->command) != VK_SUCCESS) {
             LOGE("command buffer end failed; refusing unsafe present");
             return VK_ERROR_INITIALIZATION_FAILED;
         }

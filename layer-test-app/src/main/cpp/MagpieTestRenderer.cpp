@@ -252,7 +252,7 @@ struct Renderer {
              caps.minImageExtent.width, caps.minImageExtent.height);
         surfaceExtent = caps.currentExtent;
         extent = surfaceExtent;
-        return createSwapchainObjects() && createRenderPipeline() && createFrameSync();
+        return createSwapchainObjects() && createRenderPipeline();
     }
 
     bool createSwapchainObjects() {
