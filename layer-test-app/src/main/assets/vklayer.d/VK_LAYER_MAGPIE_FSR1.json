@@ -1,7 +1,0 @@
-{
-    "file_format_version": "1.0.0",
-    "layer_name": "VK_LAYER_MAGPIE_FSR1",
-    "linkage": [
-        "libVkLayer_MagpieFSR.so"
-    ]
-}
