@@ -1198,3 +1198,6 @@ bool ensureCommandBuffer(DeviceData* d, VkQueue queue) {
         return false;
     }
     return true;
+}
+
+} // namespace
