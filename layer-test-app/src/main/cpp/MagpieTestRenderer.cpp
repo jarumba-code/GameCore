@@ -411,17 +411,24 @@ struct Renderer {
         vkDestroyShaderModule(device, vs, nullptr);
         vkDestroyShaderModule(device, fs, nullptr);
 
-        vkCreateCommandPool(device,
-            [&] { VkCommandPoolCreateInfo ci{}; ci.sType = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO;
-                  ci.flags = VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT;
-                  ci.queueFamilyIndex = graphicsFamily; return ci; }(), nullptr, &commandPool);
+        VkCommandPoolCreateInfo poolInfo{};
+        poolInfo.sType = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO;
+        poolInfo.flags = VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT;
+        poolInfo.queueFamilyIndex = graphicsFamily;
+        if (vkCreateCommandPool(device, &poolInfo, nullptr, &commandPool) != VK_SUCCESS) {
+            LOGE("renderer command pool creation failed");
+            return false;
+        }
         commandBuffers.resize(imageCount);
         VkCommandBufferAllocateInfo cai{};
         cai.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
         cai.commandPool = commandPool;
         cai.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
         cai.commandBufferCount = imageCount;
-        vkAllocateCommandBuffers(device, &cai, commandBuffers.data());
+        if (vkAllocateCommandBuffers(device, &cai, commandBuffers.data()) != VK_SUCCESS) {
+            LOGE("renderer command buffer allocation failed");
+            return false;
+        }
         framebuffers.resize(imageCount);
         for (uint32_t i = 0; i < imageCount; ++i) {
             VkFramebufferCreateInfo fci{};
@@ -452,7 +459,6 @@ struct Renderer {
     void renderFrame(double seconds) {
         uint32_t imageIndex = 0;
         FrameSync& s = sync[frameIndex % 2];
-        vkWaitForFences(device, 1, &s.inFlight, VK_TRUE, UINT64_MAX);
         const VkResult frameWait = vkWaitForFences(device, 1, &s.inFlight, VK_TRUE, UINT64_MAX);
         if (frameWait != VK_SUCCESS) {
             LOGE("frame fence wait failed: %d", (int)frameWait);
