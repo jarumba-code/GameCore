@@ -374,7 +374,7 @@ magpie_EnumerateInstanceExtensionProperties(const char*, uint32_t* pCount,
 }
 
 extern "C" VKAPI_ATTR VkResult VKAPI_CALL
-magpie_CreateInstance(const VkInstanceCreateInfo* pCreateInfo, const VkAllocationCallbacks*,
+magpie_CreateInstance(const VkInstanceCreateInfo* pCreateInfo, const VkAllocationCallbacks* pAllocator,
                       VkInstance* pInstance) {
     // Unchain the loader's link-info so the next layer/driver sees a clean create info.
     auto* chainInfo = static_cast<VkLayerInstanceCreateInfo*>(
@@ -393,7 +393,7 @@ magpie_CreateInstance(const VkInstanceCreateInfo* pCreateInfo, const VkAllocatio
     }
     const auto createInstance =
         reinterpret_cast<PFN_vkCreateInstance>(gpiA_next(nullptr, "vkCreateInstance"));
-    const VkResult result = createInstance(pCreateInfo, nullptr, pInstance);
+    const VkResult result = createInstance(pCreateInfo, pAllocator, pInstance);
     if (result == VK_SUCCESS) {
         std::lock_guard<std::mutex> guard(g_instanceLock);
         g_nextGpiA[*pInstance] = gpiA_next;
@@ -441,7 +441,7 @@ magpie_GetInstanceProcAddr(VkInstance instance, const char* name) {
 
 extern "C" VKAPI_ATTR VkResult VKAPI_CALL
 magpie_CreateDevice(VkPhysicalDevice physical, const VkDeviceCreateInfo* pCreateInfo,
-                    const VkAllocationCallbacks*, VkDevice* pDevice) {
+                    const VkAllocationCallbacks* pAllocator, VkDevice* pDevice) {
     auto* chainInfo = static_cast<VkLayerDeviceCreateInfo*>(const_cast<void*>(pCreateInfo->pNext));
     PFN_vkGetInstanceProcAddr gpiA_next = nullptr;
     PFN_vkGetDeviceProcAddr gdpA_next = nullptr;
@@ -459,7 +459,7 @@ magpie_CreateDevice(VkPhysicalDevice physical, const VkDeviceCreateInfo* pCreate
     }
     const auto createDevice =
         reinterpret_cast<PFN_vkCreateDevice>(gpiA_next(nullptr, "vkCreateDevice"));
-    const VkResult result = createDevice(physical, pCreateInfo, nullptr, pDevice);
+    const VkResult result = createDevice(physical, pCreateInfo, pAllocator, pDevice);
     if (result != VK_SUCCESS) return result;
 
     auto* data = new DeviceData();
@@ -503,6 +503,13 @@ magpie_DestroyDevice(VkDevice device, const VkAllocationCallbacks* allocator) {
             destroySubstitution(d, entry.second);
         }
         d->substitutions.clear();
+        {
+            std::lock_guard<std::mutex> ownerGuard(g_swapchainOwnerLock);
+            for (auto it = g_swapchainOwners.begin(); it != g_swapchainOwners.end();) {
+                if (it->second == d) it = g_swapchainOwners.erase(it);
+                else ++it;
+            }
+        }
         {
             std::lock_guard<std::mutex> ownerGuard(g_queueOwnerLock);
             for (auto it = g_queueOwners.begin(); it != g_queueOwners.end();) {
@@ -636,11 +643,11 @@ magpie_CreateSwapchainKHR(VkDevice device, const VkSwapchainCreateInfoKHR* pCrea
     realCi.oldSwapchain = VK_NULL_HANDLE;
 
     VkSwapchainKHR real = VK_NULL_HANDLE;
-    VkResult result = createSwapchain(device, &realCi, nullptr, &real);
+    VkResult result = createSwapchain(device, &realCi, pAllocator, &real);
     if (result != VK_SUCCESS) {
         LOGW("swapchain with TRANSFER_DST rejected (%d); retrying with the app's own usage", (int)result);
         realCi.imageUsage = pCreateInfo->imageUsage;
-        result = createSwapchain(device, &realCi, nullptr, &real);
+        result = createSwapchain(device, &realCi, pAllocator, &real);
         if (result != VK_SUCCESS) {
             LOGE("real swapchain creation failed: %d", (int)result);
             return result;
@@ -951,7 +958,7 @@ extern "C" VKAPI_ATTR VkResult VKAPI_CALL
 magpie_GetSwapchainImagesKHR(VkDevice device, VkSwapchainKHR swapchain, uint32_t* pCount,
                              VkImage* pSwapchainImages) {
     auto* d = deviceData(device);
-    if (!d) return VK_ERROR_INITIALIZATION_FAILED;
+    if (!d || !pCount) return VK_ERROR_INITIALIZATION_FAILED;
     Substitution* sub = nullptr;
     {
         std::lock_guard<std::mutex> guard(d->lock);
