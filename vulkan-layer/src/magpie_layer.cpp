@@ -739,7 +739,7 @@ magpie_CreateSwapchainKHR(VkDevice device, const VkSwapchainCreateInfoKHR* pCrea
     VkSurfaceCapabilitiesKHR caps{};
     {
         const auto surfaceCaps = reinterpret_cast<PFN_vkGetPhysicalDeviceSurfaceCapabilitiesKHR>(
-            d->gpiA_next(nullptr, "vkGetPhysicalDeviceSurfaceCapabilitiesKHR"));
+            d->gpiA_next(d->instance, "vkGetPhysicalDeviceSurfaceCapabilitiesKHR"));
         if (!surfaceCaps || surfaceCaps(d->physical, pCreateInfo->surface, &caps) != VK_SUCCESS) {
             LOGW("surface capabilities unavailable; passing swapchain through unsubstituted");
             const VkResult passResult = createSwapchain(device, pCreateInfo, pAllocator, pSwapchain);
@@ -841,7 +841,7 @@ magpie_CreateSwapchainKHR(VkDevice device, const VkSwapchainCreateInfoKHR* pCrea
 
     // Physical-device memory type resolution.
     const auto memProps = reinterpret_cast<PFN_vkGetPhysicalDeviceMemoryProperties>(
-        d->gpiA_next(nullptr, "vkGetPhysicalDeviceMemoryProperties"));
+        d->gpiA_next(d->instance, "vkGetPhysicalDeviceMemoryProperties"));
     VkPhysicalDeviceMemoryProperties mp{};
     if (memProps) memProps(d->physical, &mp);
     auto chooseMemory = [&](uint32_t bits, VkMemoryPropertyFlags needed, uint32_t* out) {
