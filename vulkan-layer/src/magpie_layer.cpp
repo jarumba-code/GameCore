@@ -29,6 +29,8 @@
 #include <algorithm>
 #include <cmath>
 #include <cstring>
+#include <cstdlib>
+#include <utility>
 #include <mutex>
 #include <string>
 #include <unordered_map>
@@ -132,6 +134,8 @@ std::mutex g_deviceLock;
 std::unordered_map<VkDevice, DeviceData*> g_devices;
 std::mutex g_swapchainOwnerLock;
 std::unordered_map<VkSwapchainKHR, DeviceData*> g_swapchainOwners;
+std::mutex g_queueOwnerLock;
+std::unordered_map<VkQueue, DeviceData*> g_queueOwners;
 
 void registerSwapchainOwner(VkSwapchainKHR swapchain, DeviceData* device) {
     if (swapchain == VK_NULL_HANDLE || device == nullptr) return;
@@ -468,6 +472,13 @@ magpie_DestroyDevice(VkDevice device, const VkAllocationCallbacks* allocator) {
             destroySubstitution(d, entry.second);
         }
         d->substitutions.clear();
+        {
+            std::lock_guard<std::mutex> ownerGuard(g_queueOwnerLock);
+            for (auto it = g_queueOwners.begin(); it != g_queueOwners.end();) {
+                if (it->second == d) it = g_queueOwners.erase(it);
+                else ++it;
+            }
+        }
         if (d->submitFence) {
             if (d->commandPending) {
                 deviceProc<PFN_vkWaitForFences>(d, "vkWaitForFences")(device, 1, &d->submitFence,
@@ -536,8 +547,12 @@ magpie_GetDeviceQueue(VkDevice device, uint32_t queueFamilyIndex, uint32_t queue
           : vkGetInstanceProcAddr(nullptr, "vkGetDeviceQueue"));
     getQueue(device, queueFamilyIndex, queueIndex, pQueue);
     if (d && *pQueue) {
-        std::lock_guard<std::mutex> guard(d->lock);
-        d->queueFamilies[*pQueue] = queueFamilyIndex;
+        {
+            std::lock_guard<std::mutex> guard(d->lock);
+            d->queueFamilies[*pQueue] = queueFamilyIndex;
+        }
+        std::lock_guard<std::mutex> ownerGuard(g_queueOwnerLock);
+        g_queueOwners[*pQueue] = d;
     }
 }
 
@@ -549,8 +564,12 @@ magpie_GetDeviceQueue2(VkDevice device, VkDeviceQueueInfo2* pQueueInfo, VkQueue*
           : vkGetInstanceProcAddr(nullptr, "vkGetDeviceQueue2"));
     getQueue2(device, pQueueInfo, pQueue);
     if (d && *pQueue) {
-        std::lock_guard<std::mutex> guard(d->lock);
-        d->queueFamilies[*pQueue] = pQueueInfo->queueFamilyIndex;
+        {
+            std::lock_guard<std::mutex> guard(d->lock);
+            d->queueFamilies[*pQueue] = pQueueInfo->queueFamilyIndex;
+        }
+        std::lock_guard<std::mutex> ownerGuard(g_queueOwnerLock);
+        g_queueOwners[*pQueue] = d;
     }
 }
 
@@ -616,8 +635,8 @@ magpie_CreateSwapchainKHR(VkDevice device, const VkSwapchainCreateInfoKHR* pCrea
     uint32_t fetchedImageCount = imageCount;
     const VkResult fetchImagesResult =
         getSwapchainImages(device, real, &fetchedImageCount, realImages.data());
-    if ((fetchImagesResult != VK_SUCCESS && fetchImagesResult != VK_INCOMPLETE) ||
-        fetchedImageCount == 0) {
+    if (fetchImagesResult != VK_SUCCESS || fetchedImageCount == 0 ||
+        fetchedImageCount > realImages.size()) {
         LOGE("real swapchain image handles unavailable; passthrough mode (L3)");
         *pSwapchain = real;
         registerSwapchainOwner(real, d);
@@ -657,7 +676,8 @@ magpie_CreateSwapchainKHR(VkDevice device, const VkSwapchainCreateInfoKHR* pCrea
     // Fake low-resolution images: the app renders into them (its own usage) and the EASU pass
     // samples them (SAMPLED). If SAMPLED is unsupported at this size, fall back to blit, where
     // the fake image is instead a blit SOURCE (TRANSFER_SRC). If even that fails, L3 passthrough.
-    VkImageUsageFlags fakeUsage = pCreateInfo->imageUsage | VK_IMAGE_USAGE_SAMPLED;
+    VkImageUsageFlags fakeUsage =
+        pCreateInfo->imageUsage | VK_IMAGE_USAGE_SAMPLED | VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
     if (mode == Mode::BLIT) {
         fakeUsage = (pCreateInfo->imageUsage | VK_IMAGE_USAGE_TRANSFER_SRC) & ~VK_IMAGE_USAGE_SAMPLED;
     }
@@ -729,6 +749,8 @@ magpie_CreateSwapchainKHR(VkDevice device, const VkSwapchainCreateInfoKHR* pCrea
             vi.format = pCreateInfo->imageFormat;
             vi.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
             if (createView(device, &vi, nullptr, &fake.view) != VK_SUCCESS) {
+                freeMemory(device, fake.mem, nullptr);
+                destroyImage(device, fake.image, nullptr);
                 fakeOk = false;
                 break;
             }
@@ -967,7 +989,22 @@ struct RcasPush {
 // is the queue the app itself chose for presentation, which on Android is graphics-capable and,
 // on Mali, compute-capable; the family flags were recorded when the app called GetDeviceQueue.
 bool ensureCommandBuffer(DeviceData* d, VkQueue queue) {
-    if (d->pool != VK_NULL_HANDLE) return true;
+    if (d->pool != VK_NULL_HANDLE && d->command != VK_NULL_HANDLE &&
+        d->submitFence != VK_NULL_HANDLE) return true;
+    // A prior partial initialization failed. Release its incomplete resources before retrying.
+    if (d->submitFence) {
+        deviceProc<PFN_vkDestroyFence>(d, "vkDestroyFence")(d->device, d->submitFence, nullptr);
+        d->submitFence = VK_NULL_HANDLE;
+    }
+    if (d->queries) {
+        deviceProc<PFN_vkDestroyQueryPool>(d, "vkDestroyQueryPool")(d->device, d->queries, nullptr);
+        d->queries = VK_NULL_HANDLE;
+    }
+    if (d->pool) {
+        deviceProc<PFN_vkDestroyCommandPool>(d, "vkDestroyCommandPool")(d->device, d->pool, nullptr);
+        d->pool = VK_NULL_HANDLE;
+        d->command = VK_NULL_HANDLE;
+    }
     uint32_t family = 0;
     {
         const auto it = d->queueFamilies.find(queue);
@@ -1023,7 +1060,12 @@ magpie_QueuePresentKHR(VkQueue queue, const VkPresentInfoKHR* pPresentInfo) {
         const auto it = g_swapchainOwners.find(pPresentInfo->pSwapchains[0]);
         if (it != g_swapchainOwners.end()) d = it->second;
     }
-    if (!d) return VK_ERROR_OUT_OF_HOST_MEMORY;
+    if (!d) {
+        std::lock_guard<std::mutex> queueGuard(g_queueOwnerLock);
+        const auto queueIt = g_queueOwners.find(queue);
+        if (queueIt != g_queueOwners.end()) d = queueIt->second;
+    }
+    if (!d) return VK_ERROR_INITIALIZATION_FAILED;
 
     Substitution* sub = nullptr;
     uint32_t index = 0;
