@@ -49,7 +49,7 @@ class GameModeScalingViewModel @Inject constructor(
     private val scalingProfiles: GameScalingProfileRepository,
     private val displaySize: DisplaySizeController,
     @ApplicationContext private val context: Context,
-    @ApplicationIoDispatcher private val io: CoroutineDispatcher,
+    @IoDispatcher private val io: CoroutineDispatcher,
 ) : ViewModel() {
 
     private val state = MutableStateFlow(GameModeScalingUiState())
