@@ -24,6 +24,8 @@
 #include <string>
 #include <thread>
 #include <vector>
+#include <cstdlib>
+#include <sys/system_properties.h>
 
 #define LOGI(...) __android_log_print(ANDROID_LOG_INFO, "MagpieTest", __VA_ARGS__)
 #define LOGE(...) __android_log_print(ANDROID_LOG_ERROR, "MagpieTest", __VA_ARGS__)
@@ -31,6 +33,24 @@
 static const char* MAGPIE_LAYER_NAME = "VK_LAYER_MAGPIE_FSR1";
 
 namespace {
+
+float configuredScale() {
+    char value[PROP_VALUE_MAX] = {0};
+    if (__system_property_get("debug.magpie.scale", value) > 0) {
+        const float parsed = std::strtof(value, nullptr);
+        if (parsed > 0.1f && parsed < 1.0f) return parsed;
+    }
+    return 0.5f;
+}
+
+VkExtent2D renderExtent(VkExtent2D nativeExtent, bool layerEnabled) {
+    if (!layerEnabled) return nativeExtent;
+    const float scale = configuredScale();
+    return {
+        std::max(1u, static_cast<uint32_t>(std::lround(nativeExtent.width * scale))),
+        std::max(1u, static_cast<uint32_t>(std::lround(nativeExtent.height * scale)))
+    };
+}
 
 struct FrameSync {
     VkSemaphore imageAvailable = VK_NULL_HANDLE;
@@ -50,7 +70,8 @@ struct Renderer {
     uint32_t graphicsFamily = UINT32_MAX;
     VkQueue queue = VK_NULL_HANDLE;
     VkSwapchainKHR swapchain = VK_NULL_HANDLE;
-    VkExtent2D extent{};
+    VkExtent2D surfaceExtent{};  // native Android surface / real presentation swapchain
+    VkExtent2D extent{};          // app render extent (low-res when the layer is enabled)
     VkFormat format = VK_FORMAT_R8G8B8A8_UNORM;
     uint32_t imageCount = 0;
     std::vector<VkImage> swapchainImages;
@@ -174,7 +195,11 @@ struct Renderer {
         LOGI("surface currentExtent=%ux%u minImageExtent=%ux%u (requested this extent)",
              caps.currentExtent.width, caps.currentExtent.height,
              caps.minImageExtent.width, caps.minImageExtent.height);
-        extent = caps.currentExtent;
+        surfaceExtent = caps.currentExtent;
+        extent = renderExtent(surfaceExtent, layerEnabled);
+        LOGI("renderer extents: surface=%ux%u render=%ux%u layer=%d scale=%.3f",
+             surfaceExtent.width, surfaceExtent.height, extent.width, extent.height,
+             layerEnabled ? 1 : 0, layerEnabled ? configuredScale() : 1.0f);
         return createSwapchainObjects() && createRenderPipeline() && createFrameSync();
     }
 
@@ -183,14 +208,17 @@ struct Renderer {
             vkGetInstanceProcAddr(instance, "vkGetPhysicalDeviceSurfaceCapabilitiesKHR"));
         VkSurfaceCapabilitiesKHR caps{};
         capsFn(physical, surface, &caps);
-        extent = caps.currentExtent;
+        surfaceExtent = caps.currentExtent;
+        extent = renderExtent(surfaceExtent, layerEnabled);
         VkSwapchainCreateInfoKHR sci{};
         sci.sType = VK_STRUCTURE_TYPE_SWAPCHAIN_CREATE_INFO_KHR;
         sci.surface = surface;
         sci.minImageCount = std::max(3u, caps.minImageCount);
         sci.imageFormat = format;
         sci.imageColorSpace = VK_COLOR_SPACE_SRGB_NONLINEAR_KHR;
-        sci.imageExtent = extent;
+        // Android's fixed surface extent remains native. The layer substitutes smaller images;
+        // this controlled renderer sizes its framebuffer, viewport and scissor to the fake image.
+        sci.imageExtent = surfaceExtent;
         sci.imageArrayLayers = 1;
         sci.imageUsage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT;
         sci.imageSharingMode = VK_SHARING_MODE_EXCLUSIVE;
@@ -213,8 +241,8 @@ struct Renderer {
         vkGetSwapchainImagesKHR(device, swapchain, &imageCount, swapchainImages.data());
         // THE DIAGNOSTIC LINE: what images did the app actually get? With the layer substituted,
         // this extent is the reduced one (e.g. 800x360 on the 1600x720 surface).
-        LOGI("swapchain images: count=%u extent(logged by app)=%ux%u",
-             imageCount, extent.width, extent.height);
+        LOGI("swapchain images: count=%u surface=%ux%u render=%ux%u",
+             imageCount, surfaceExtent.width, surfaceExtent.height, extent.width, extent.height);
 
         if (old != VK_NULL_HANDLE) {
             for (VkFramebuffer fb : framebuffers)
