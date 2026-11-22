@@ -372,9 +372,29 @@ magpie_EnumerateInstanceLayerProperties(uint32_t* pPropertyCount, VkLayerPropert
 }
 
 extern "C" VKAPI_ATTR VkResult VKAPI_CALL
-magpie_EnumerateInstanceExtensionProperties(const char*, uint32_t* pCount,
+magpie_EnumerateInstanceExtensionProperties(const char* pLayerName, uint32_t* pCount,
                                             VkExtensionProperties* pProperties) {
-    if (pCount) *pCount = 0;
+    if (pLayerName && std::strcmp(pLayerName, MAGPIE_LAYER_NAME) != 0)
+        return VK_ERROR_LAYER_NOT_PRESENT;
+    if (!pCount) return VK_ERROR_INITIALIZATION_FAILED;
+    *pCount = 0;
+    (void)pProperties;
+    return VK_SUCCESS;
+}
+
+extern "C" VKAPI_ATTR VkResult VKAPI_CALL
+magpie_EnumerateDeviceLayerProperties(VkPhysicalDevice, uint32_t* pPropertyCount,
+                                      VkLayerProperties* pProperties) {
+    return magpie_EnumerateInstanceLayerProperties(pPropertyCount, pProperties);
+}
+
+extern "C" VKAPI_ATTR VkResult VKAPI_CALL
+magpie_EnumerateDeviceExtensionProperties(VkPhysicalDevice, const char* pLayerName,
+                                          uint32_t* pCount, VkExtensionProperties* pProperties) {
+    if (pLayerName && std::strcmp(pLayerName, MAGPIE_LAYER_NAME) != 0)
+        return VK_ERROR_LAYER_NOT_PRESENT;
+    if (!pCount) return VK_ERROR_INITIALIZATION_FAILED;
+    *pCount = 0;
     (void)pProperties;
     return VK_SUCCESS;
 }
@@ -433,6 +453,10 @@ magpie_GetInstanceProcAddr(VkInstance instance, const char* name) {
         return reinterpret_cast<void*>(&magpie_EnumerateInstanceLayerProperties);
     if (strcmp(name, "vkEnumerateInstanceExtensionProperties") == 0)
         return reinterpret_cast<void*>(&magpie_EnumerateInstanceExtensionProperties);
+    if (strcmp(name, "vkEnumerateDeviceLayerProperties") == 0)
+        return reinterpret_cast<void*>(&magpie_EnumerateDeviceLayerProperties);
+    if (strcmp(name, "vkEnumerateDeviceExtensionProperties") == 0)
+        return reinterpret_cast<void*>(&magpie_EnumerateDeviceExtensionProperties);
     if (strcmp(name, "vkCreateInstance") == 0)
         return reinterpret_cast<void*>(&magpie_CreateInstance);
     if (strcmp(name, "vkDestroyInstance") == 0)
@@ -1450,18 +1474,14 @@ vkEnumerateInstanceExtensionProperties(const char* pLayerName, uint32_t* pProper
 }
 
 extern "C" VKAPI_ATTR VkResult VKAPI_CALL
-vkEnumerateDeviceLayerProperties(VkPhysicalDevice, uint32_t* pPropertyCount,
+vkEnumerateDeviceLayerProperties(VkPhysicalDevice physicalDevice, uint32_t* pPropertyCount,
                                  VkLayerProperties* pProperties) {
-    return magpie_EnumerateInstanceLayerProperties(pPropertyCount, pProperties);
+    return magpie_EnumerateDeviceLayerProperties(physicalDevice, pPropertyCount, pProperties);
 }
 
 extern "C" VKAPI_ATTR VkResult VKAPI_CALL
-vkEnumerateDeviceExtensionProperties(VkPhysicalDevice, const char* pLayerName,
+vkEnumerateDeviceExtensionProperties(VkPhysicalDevice physicalDevice, const char* pLayerName,
                                      uint32_t* pPropertyCount, VkExtensionProperties* pProperties) {
-    if (pLayerName && std::strcmp(pLayerName, MAGPIE_LAYER_NAME) != 0)
-        return VK_ERROR_LAYER_NOT_PRESENT;
-    if (!pPropertyCount) return VK_ERROR_INITIALIZATION_FAILED;
-    *pPropertyCount = 0;
-    (void)pProperties;
-    return VK_SUCCESS;
+    return magpie_EnumerateDeviceExtensionProperties(physicalDevice, pLayerName,
+                                                     pPropertyCount, pProperties);
 }
