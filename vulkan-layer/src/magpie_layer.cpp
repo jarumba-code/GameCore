@@ -112,6 +112,15 @@ struct DeviceData {
     VkPipeline rcasPipeline = VK_NULL_HANDLE;
     VkSampler sampler = VK_NULL_HANDLE;
 
+    // One serialized layer command buffer. Its fence must complete before the buffer is reset
+    // or its query pool is reused on the next present.
+    VkCommandPool pool = VK_NULL_HANDLE;
+    VkCommandBuffer command = VK_NULL_HANDLE;
+    VkQueryPool queries = VK_NULL_HANDLE;
+    VkFence submitFence = VK_NULL_HANDLE;
+    bool commandPending = false;
+    double timestampPeriodNanos = 0.0;
+
     std::unordered_map<VkSwapchainKHR, Substitution> substitutions;
     std::unordered_map<VkQueue, uint32_t> queueFamilies;
     std::mutex lock;  // guards substitutions + command buffer recording
@@ -440,9 +449,19 @@ magpie_DestroyDevice(VkDevice device, const VkAllocationCallbacks* allocator) {
             destroySubstitution(d, entry.second);
         }
         d->substitutions.clear();
+        if (d->submitFence) {
+            if (d->commandPending) {
+                deviceProc<PFN_vkWaitForFences>(d, "vkWaitForFences")(device, 1, &d->submitFence,
+                    VK_TRUE, UINT64_MAX);
+                d->commandPending = false;
+            }
+            deviceProc<PFN_vkDestroyFence>(d, "vkDestroyFence")(device, d->submitFence, nullptr);
+            d->submitFence = VK_NULL_HANDLE;
+        }
         if (d->pool) {
             deviceProc<PFN_vkDestroyCommandPool>(d, "vkDestroyCommandPool")(device, d->pool, nullptr);
             d->pool = VK_NULL_HANDLE;
+            d->command = VK_NULL_HANDLE;
         }
         if (d->queries) {
             deviceProc<PFN_vkDestroyQueryPool>(d, "vkDestroyQueryPool")(device, d->queries, nullptr);
@@ -937,6 +956,15 @@ bool ensureCommandBuffer(DeviceData* d, VkQueue queue) {
     qp.queryCount = 4;
     const auto createQueryPool = deviceProc<PFN_vkCreateQueryPool>(d, "vkCreateQueryPool");
     if (createQueryPool(d->device, &qp, nullptr, &d->queries) != VK_SUCCESS) d->queries = VK_NULL_HANDLE;
+
+    VkFenceCreateInfo fci{};
+    fci.sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO;
+    fci.flags = VK_FENCE_CREATE_SIGNALED_BIT;
+    const auto createFence = deviceProc<PFN_vkCreateFence>(d, "vkCreateFence");
+    if (createFence(d->device, &fci, nullptr, &d->submitFence) != VK_SUCCESS) {
+        d->failureReason = "layer submission fence creation failed";
+        return false;
+    }
     return true;
 }
 
@@ -1035,6 +1063,19 @@ magpie_QueuePresentKHR(VkQueue queue, const VkPresentInfoKHR* pPresentInfo) {
             sub->timingsValid = false;
         }
 
+        // The previous submission may still be executing. Never reset or re-record a pending
+        // command buffer; wait only for the layer's own prior work, not the whole device.
+        if (d->commandPending) {
+            const auto waitForFences = deviceProc<PFN_vkWaitForFences>(d, "vkWaitForFences");
+            const VkResult waitResult = waitForFences(d->device, 1, &d->submitFence,
+                                                       VK_TRUE, UINT64_MAX);
+            if (waitResult != VK_SUCCESS) {
+                LOGE("layer submission fence wait failed (%d); passthrough", (int)waitResult);
+                const auto present = deviceProc<PFN_vkQueuePresentKHR>(d, "vkQueuePresentKHR");
+                return present(queue, pPresentInfo);
+            }
+            d->commandPending = false;
+        }
         resetCb(d->command, VK_COMMAND_BUFFER_RESET_RELEASE_RESOURCES_BIT);
         VkCommandBufferBeginInfo bi{};
         bi.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
@@ -1164,18 +1205,28 @@ magpie_QueuePresentKHR(VkQueue queue, const VkPresentInfoKHR* pPresentInfo) {
         si.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
         si.waitSemaphoreCount = pPresentInfo->waitSemaphoreCount;
         si.pWaitSemaphores = pPresentInfo->pWaitSemaphores;
-        si.pWaitDstStageMask = nullptr;  // all semaphore waits happen at ALL_COMMANDS by default
+        std::vector<VkPipelineStageFlags> waitStages(
+            pPresentInfo->waitSemaphoreCount, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT);
+        si.pWaitDstStageMask = waitStages.empty() ? nullptr : waitStages.data();
         si.commandBufferCount = 1;
         si.pCommandBuffers = &d->command;
         si.signalSemaphoreCount = 1;
         si.pSignalSemaphores = &layerSem;
-        const VkResult submitResult = submit(queue, 1, &si, VK_NULL_HANDLE);
+        const auto resetFences = deviceProc<PFN_vkResetFences>(d, "vkResetFences");
+        const VkResult resetFenceResult = resetFences(d->device, 1, &d->submitFence);
+        if (resetFenceResult != VK_SUCCESS) {
+            LOGE("layer submission fence reset failed (%d); passthrough", (int)resetFenceResult);
+            const auto present = deviceProc<PFN_vkQueuePresentKHR>(d, "vkQueuePresentKHR");
+            return present(queue, pPresentInfo);
+        }
+        const VkResult submitResult = submit(queue, 1, &si, d->submitFence);
         if (submitResult != VK_SUCCESS) {
             LOGE("layer submit failed (%d); passthrough with app semaphores", (int)submitResult);
             sub->mode = sub->mode == Mode::FSR ? Mode::BLIT : sub->mode;
             const auto present = deviceProc<PFN_vkQueuePresentKHR>(d, "vkQueuePresentKHR");
             return present(queue, pPresentInfo);
         }
+        d->commandPending = true;
         sub->timingsValid = sub->mode == Mode::FSR && d->queries != VK_NULL_HANDLE;
 
         VkPresentInfoKHR presentInfo = *pPresentInfo;
