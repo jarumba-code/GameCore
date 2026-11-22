@@ -42,8 +42,6 @@ jobs:
             build-tools;34.0.0
             ndk;26.1.10909125
             cmake;3.22.1
-            emulator
-            system-images;android-35;google_apis;arm64-v8a
 
       - name: Export pinned NDK path
         run: |
@@ -84,7 +82,7 @@ jobs:
             --test-dir "$RUNNER_TEMP/fsr1-reference" --output-on-failure \
             2>&1 | tee "$RUNNER_TEMP/android-magpie-fsr-reference-test.log"
 
-      - name: Build all JVM tests, Android tests, debug APK, and the layer test app
+      - name: Run JVM tests and build Android test APKs, debug APK, and the layer test app
         id: gradle-build
         shell: bash
         run: |
