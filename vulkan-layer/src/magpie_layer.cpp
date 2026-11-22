@@ -4,11 +4,9 @@
 //     → vkQueuePresentKHR: layer records EASU (low→native) → RCAS → CopyImage into the REAL
 //       native-resolution swapchain image → restores PRESENT_SRC_KHR → presents.
 //
-// Loading (verified against AOSP frameworks/native/vulkan/libvulkan, see
-// docs/ANDROID_MAGPIE_FRAME_ACCESS_DECISION.md): the Android loader always scans the app's own
-// nativeLibraryDir for libVkLayer_*.so; an explicit ppEnabledLayerNames enable works for ANY app
-// on user builds — the controlled test app opts in by name. Nothing here can load into a retail
-// game that does not ship this layer in its own APK.
+// Loading assumption for this prototype: the layer library is packaged in the controlled
+// test APK and explicitly enabled by name. Discovery must still be confirmed on the target
+// Android build; this does not claim support for arbitrary third-party games.
 //
 // Synchronization (verified pattern, vkBasalt-style): vkQueuePresentKHR(queue, info) is called
 // with the app's render-signal semaphore(s) in pWaitSemaphores. The layer records its command
@@ -16,12 +14,12 @@
 // pWaitSemaphores to it, and calls the next layer's/driver's vkQueuePresentKHR. Acquire and
 // vkQueueSubmit are never intercepted.
 //
-// Fallback ladder (each rung logs its reason; the layer degrades, never errors out):
-//   L1 FSR     — low-res substitution + EASU/RCAS + CopyImage (requires SAMPLED on fake images,
-//                TRANSFER_DST on real images, VK_FORMAT_R8G8B8A8_UNORM, compute-capable present
-//                queue)
+// Fallback ladder (decided before substituted images are exposed):
+//   L1 FSR     — low-res substitution + EASU/RCAS + CopyImage
 //   L2 BLIT    — low-res substitution + vkCmdBlitImage upscale (linear filter; no FSR)
-//   L3 PASS    — no substitution; the app's original swapchain is handed through untouched
+//   L3 PASS    — no substitution; the app receives the real swapchain images unchanged.
+// Once low-resolution images have been returned to the app, a layer submission failure is
+// fail-closed: presenting the untouched real image would be undefined/unrendered content.
 #define VK_USE_PLATFORM_ANDROID_KHR
 #include <vulkan/vulkan.h>
 #include <vulkan/vk_layer.h>
@@ -751,8 +749,9 @@ magpie_CreateSwapchainKHR(VkDevice device, const VkSwapchainCreateInfoKHR* pCrea
     VkSwapchainCreateInfoKHR realCi = *pCreateInfo;
     realCi.imageExtent = caps.currentExtent;  // Android requires the window's own extent
     realCi.imageUsage |= VK_IMAGE_USAGE_TRANSFER_DST;  // for the FSR/blit copy-in
-    // On recreate, the old REAL swapchain retires through the normal mechanism.
-    realCi.oldSwapchain = VK_NULL_HANDLE;
+    // The app holds the real swapchain handle, so preserve Vulkan's oldSwapchain retirement
+    // semantics instead of silently severing the relationship during recreation.
+    realCi.oldSwapchain = pCreateInfo->oldSwapchain;
 
     VkSwapchainKHR real = VK_NULL_HANDLE;
     VkResult result = createSwapchain(device, &realCi, pAllocator, &real);
