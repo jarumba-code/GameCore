@@ -68,7 +68,7 @@ class GameModeScalingViewModel @Inject constructor(
             val games = gameProfiles.profiles.first().filter { it.isEnabled }
             val selected = state.value.selectedPackage ?: games.firstOrNull()?.packageName
             val panel = displaySize.state().valueOrNull?.physical
-            val intervention = selected?.let { controller.readIntervention(it).valueOrNull() }
+            val intervention = selected?.let { controller.readIntervention(it).valueOrNull }
             val stored = selected?.let { scalingProfiles.profileFor(it) }
             val running = selected?.let { controller.isGameRunning(it) } ?: false
             state.update {

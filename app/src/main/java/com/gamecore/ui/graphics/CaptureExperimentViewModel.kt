@@ -59,8 +59,10 @@ class CaptureExperimentViewModel @Inject constructor(
         if (state.value.busy) return
         viewModelScope.launch {
             state.update { it.copy(busy = true) }
-            val outcome = withContext(Dispatchers.Default) {
-                runCatching { captureAndProcess() }.getOrElse { "Capture experiment failed: ${it.message}" }
+            val outcome: RunResult = withContext(Dispatchers.Default) {
+                runCatching { captureAndProcess() }.getOrElse {
+                    RunResult("Capture experiment failed: ${it.message}", null, null)
+                }
             }
             state.update { it.copy(busy = false, statusLine = outcome.statusLine, captured = outcome.captured, processed = outcome.processed) }
         }

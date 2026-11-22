@@ -133,7 +133,7 @@ class GameModeScalingController @Inject constructor(
         }
 
         val existingRow = repository.profileFor(packageName)
-        val existingIntervention = readIntervention(packageName).valueOrNull()
+        val existingIntervention = readIntervention(packageName).valueOrNull
         val deviceHasIntervention = existingIntervention?.hasIntervention == true
         if (deviceHasIntervention && existingRow == null && !replaceExisting) {
             return@withContext GameModeApplyOutcome.ExistingIntervention(
@@ -168,7 +168,7 @@ class GameModeScalingController @Inject constructor(
 
         // Read-back: registration is confirmed from the device, not from the exit code. For a
         // native restore the honest confirmation is the intervention's absence.
-        val after = readIntervention(packageName).valueOrNull()
+        val after = readIntervention(packageName).valueOrNull
         val confirmed = when (scale) {
             GameModeScale.NATIVE -> after?.hasIntervention != true
             else -> after?.hasIntervention == true
@@ -307,7 +307,7 @@ class GameModeScalingController @Inject constructor(
         if (modeCommand != null) {
             shell.execute(modeCommand, ElevatedShell.LONG_TIMEOUT)
         }
-        val after = readIntervention(packageName).valueOrNull()
+        val after = readIntervention(packageName).valueOrNull
         val row = repository.profileFor(packageName)
         val priorNote = row?.priorIntervention
         repository.save(
