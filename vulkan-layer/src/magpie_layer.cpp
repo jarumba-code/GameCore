@@ -451,6 +451,13 @@ magpie_DestroyDevice(VkDevice device, const VkAllocationCallbacks* allocator) {
     auto* d = deviceData(device);
     if (d) {
         std::lock_guard<std::mutex> guard(d->lock);
+        if (d->commandPending && d->submitFence) {
+            const VkResult waitResult = deviceProc<PFN_vkWaitForFences>(d, "vkWaitForFences")(
+                device, 1, &d->submitFence, VK_TRUE, UINT64_MAX);
+            if (waitResult != VK_SUCCESS)
+                LOGE("waiting for layer work during device destruction failed: %d", (int)waitResult);
+            d->commandPending = false;
+        }
         for (auto& entry : d->substitutions) {
             destroySubstitution(d, entry.second);
         }
@@ -913,6 +920,13 @@ magpie_DestroySwapchainKHR(VkDevice device, VkSwapchainKHR swapchain,
     auto* d = deviceData(device);
     if (d) {
         std::lock_guard<std::mutex> guard(d->lock);
+        if (d->commandPending && d->submitFence) {
+            const VkResult waitResult = deviceProc<PFN_vkWaitForFences>(d, "vkWaitForFences")(
+                device, 1, &d->submitFence, VK_TRUE, UINT64_MAX);
+            if (waitResult != VK_SUCCESS)
+                LOGE("waiting for layer work before swapchain destruction failed: %d", (int)waitResult);
+            d->commandPending = false;
+        }
         const auto it = d->substitutions.find(swapchain);
         if (it != d->substitutions.end()) {
             destroySubstitution(d, it->second);
