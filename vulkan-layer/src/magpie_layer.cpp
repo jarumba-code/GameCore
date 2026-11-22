@@ -122,6 +122,9 @@ struct DeviceData {
     VkFence submitFence = VK_NULL_HANDLE;
     bool commandPending = false;
     double timestampPeriodNanos = 0.0;
+    // Default for applications that treat substituted images like swapchain images. The
+    // controlled test app opts into GENERAL because its layer-owned images are not presentable.
+    VkImageLayout fakeFinalLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
 
     std::unordered_map<VkSwapchainKHR, Substitution> substitutions;
     std::unordered_map<VkQueue, uint32_t> queueFamilies;
@@ -153,6 +156,17 @@ DeviceData* deviceData(VkDevice device) {
     std::lock_guard<std::mutex> guard(g_deviceLock);
     const auto it = g_devices.find(device);
     return it == g_devices.end() ? nullptr : it->second;
+}
+
+extern "C" VKAPI_ATTR VkResult VKAPI_CALL
+magpie_SetFakeImageFinalLayout(VkDevice device, VkImageLayout layout) {
+    auto* d = deviceData(device);
+    if (!d || (layout != VK_IMAGE_LAYOUT_PRESENT_SRC_KHR && layout != VK_IMAGE_LAYOUT_GENERAL))
+        return VK_ERROR_INITIALIZATION_FAILED;
+    std::lock_guard<std::mutex> guard(d->lock);
+    d->fakeFinalLayout = layout;
+    LOGI("controlled app selected fake image final layout %d", (int)layout);
+    return VK_SUCCESS;
 }
 
 template <typename T>
@@ -1203,10 +1217,13 @@ magpie_QueuePresentKHR(VkQueue queue, const VkPresentInfoKHR* pPresentInfo) {
             // from the PRESENT_SRC layout, the contents will be the same"); srcAccessMask must
             // be 0 for a source layout of PRESENT_SRC. The semaphore wait on the app's
             // render-signal semaphore already orders the app's color writes before this barrier.
-            recordBarrier(d->command, fakeImage, VK_IMAGE_LAYOUT_PRESENT_SRC_KHR,
+            const bool fakeWasPresent = d->fakeFinalLayout == VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
+            recordBarrier(d->command, fakeImage, d->fakeFinalLayout,
                           VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-                          0, VK_ACCESS_SHADER_READ_BIT,
-                          VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
+                          fakeWasPresent ? 0 : VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT,
+                          VK_ACCESS_SHADER_READ_BIT,
+                          fakeWasPresent ? VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT
+                                         : VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
                           VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, barrier);
             recordBarrier(d->command, sub->middle.image, VK_IMAGE_LAYOUT_UNDEFINED,
                           VK_IMAGE_LAYOUT_GENERAL, 0, VK_ACCESS_SHADER_WRITE_BIT,
@@ -1275,10 +1292,13 @@ magpie_QueuePresentKHR(VkQueue queue, const VkPresentInfoKHR* pPresentInfo) {
         } else if (sub->mode == Mode::BLIT) {
             // fake: PRESENT_SRC → TRANSFER_SRC (same reasoning as the FSR barrier above);
             // blit scales low→native with a linear filter (bilinear upscale, no FSR).
-            recordBarrier(d->command, fakeImage, VK_IMAGE_LAYOUT_PRESENT_SRC_KHR,
+            const bool fakeWasPresent = d->fakeFinalLayout == VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
+            recordBarrier(d->command, fakeImage, d->fakeFinalLayout,
                           VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
-                          0, VK_ACCESS_TRANSFER_READ_BIT,
-                          VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
+                          fakeWasPresent ? 0 : VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT,
+                          VK_ACCESS_TRANSFER_READ_BIT,
+                          fakeWasPresent ? VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT
+                                         : VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
                           VK_PIPELINE_STAGE_TRANSFER_BIT, barrier);
             recordBarrier(d->command, realImage, VK_IMAGE_LAYOUT_UNDEFINED,
                           VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 0, VK_ACCESS_TRANSFER_WRITE_BIT,
@@ -1353,6 +1373,8 @@ magpie_GetDeviceProcAddr(VkDevice device, const char* name) {
     if (!name) return nullptr;
     if (strcmp(name, "vkGetDeviceProcAddr") == 0)
         return reinterpret_cast<void*>(&magpie_GetDeviceProcAddr);
+    if (strcmp(name, "vkMagpieSetFakeImageFinalLayout") == 0)
+        return reinterpret_cast<void*>(&magpie_SetFakeImageFinalLayout);
     if (strcmp(name, "vkDestroyDevice") == 0)
         return reinterpret_cast<void*>(&magpie_DestroyDevice);
     if (strcmp(name, "vkGetDeviceQueue") == 0)
