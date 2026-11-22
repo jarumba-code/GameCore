@@ -24,6 +24,7 @@
 #include <string>
 #include <thread>
 #include <vector>
+#include "test_shaders.h"
 
 #define LOGI(...) __android_log_print(ANDROID_LOG_INFO, "MagpieTest", __VA_ARGS__)
 #define LOGE(...) __android_log_print(ANDROID_LOG_ERROR, "MagpieTest", __VA_ARGS__)
@@ -342,8 +343,7 @@ struct Renderer {
             return m;
         };
         // The test renderer's own shaders, embedded by its CMake (test_shaders.h).
-#include "test_shaders.h"
-        VkShaderModule vs = createModule(magpie_test::kVertSpv, magpie_test::kVertSpv_word_count);
+VkShaderModule vs = createModule(magpie_test::kVertSpv, magpie_test::kVertSpv_word_count);
         VkShaderModule fs = createModule(magpie_test::kFragSpv, magpie_test::kFragSpv_word_count);
         if (vs == VK_NULL_HANDLE || fs == VK_NULL_HANDLE) return false;
 
