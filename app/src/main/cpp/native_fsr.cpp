@@ -183,9 +183,10 @@ Java_com_gamecore_ui_graphics_FsrNative_vulkanFsrProcess(JNIEnv* env, jclass, jl
     std::string error;
     const MagpieStatusV1 locked = lockPair(env, src, dst, &si, &di, &sp, &dp, &error);
     if (locked != MAGPIE_OK) return env->NewStringUTF(error.c_str());
-    if (si.width != di.width / 2 || si.height != di.height / 2) {
+    if (static_cast<uint64_t>(di.width) != static_cast<uint64_t>(si.width) * 2u ||
+        static_cast<uint64_t>(di.height) != static_cast<uint64_t>(si.height) * 2u) {
         unlockPair(env, src, dst);
-        return env->NewStringUTF("engine dispatch expects a 2x output bitmap");
+        return env->NewStringUTF("engine dispatch expects output dimensions exactly 2x the input");
     }
     const MagpieRgba8ViewV1 input{static_cast<const uint8_t*>(sp), si.width, si.height, si.stride};
     MagpieRgba8OutputV1 output{static_cast<uint8_t*>(dp), di.width, di.height, di.stride};
