@@ -97,6 +97,88 @@ jobs:
             :layer-test-app:assembleDebug \
             2>&1 | tee "$RUNNER_TEMP/android-magpie-gradle-build.log"
 
+      - name: Diagnose layer-test-app shader generation and Ninja dependency graph
+        id: shader-diagnosis
+        if: always()
+        shell: bash
+        run: |
+          set -o pipefail
+          echo "=== Layer-test-app CMake build diagnostics ==="
+
+          # Find all CMake build directories using null-delimited discovery
+          BUILD_DIR_COUNT=0
+          while IFS= read -r -d '' ninja_file; do
+            CMAKE_BUILD_DIR="${ninja_file%/build.ninja}"
+            BUILD_DIR_COUNT=$((BUILD_DIR_COUNT + 1))
+            echo "CMake build directory: $CMAKE_BUILD_DIR"
+
+            # List all targets
+            echo ""
+            echo "=== All Ninja targets ==="
+            ninja -C "$CMAKE_BUILD_DIR" -t targets all 2>&1 | tee -a "$RUNNER_TEMP/layer-test-ninja-targets.log"
+            NINJA_TARGETS_EXIT=${PIPESTATUS[0]}
+            echo "ninja -t targets exit code: $NINJA_TARGETS_EXIT"
+
+            # Query magpie_test_shaders target
+            echo ""
+            echo "=== magpie_test_shaders target dependency graph ==="
+            ninja -C "$CMAKE_BUILD_DIR" -t query magpie_test_shaders 2>&1 | tee -a "$RUNNER_TEMP/layer-test-magpie-test-shaders-deps.log"
+            NINJA_QUERY_EXIT=${PIPESTATUS[0]}
+            echo "ninja -t query magpie_test_shaders exit code: $NINJA_QUERY_EXIT"
+
+            # Show commands that would run for shader target
+            echo ""
+            echo "=== Commands for shader generation ==="
+            ninja -C "$CMAKE_BUILD_DIR" -t commands magpie_test_shaders 2>&1 | tee -a "$RUNNER_TEMP/layer-test-shader-commands.log"
+            NINJA_COMMANDS_EXIT=${PIPESTATUS[0]}
+            echo "ninja -t commands magpie_test_shaders exit code: $NINJA_COMMANDS_EXIT"
+
+            # Check for shader outputs using null-delimited discovery
+            echo ""
+            echo "=== Shader output files (should exist after build) ==="
+            for f in test_vert.spv test_frag.spv easu.spv rcas.spv test_shaders.h magpie_shaders.h; do
+              echo "  Checking for $f:"
+              FOUND_COUNT=0
+              while IFS= read -r -d '' FOUND; do
+                FOUND_COUNT=$((FOUND_COUNT + 1))
+                SIZE=$(stat -c%s "$FOUND" 2>/dev/null || stat -f%z "$FOUND" 2>/dev/null)
+                echo "    FOUND: $FOUND (size: $SIZE bytes)"
+              done < <(find "$CMAKE_BUILD_DIR" -name "$f" -type f -print0 2>/dev/null)
+              if [ "$FOUND_COUNT" -eq 0 ]; then
+                echo "    NOT FOUND"
+              fi
+            done
+
+            # Check Ninja rules for shader generation
+            echo ""
+            echo "=== Ninja rules containing shader ==="
+            echo "  === Build directory: $CMAKE_BUILD_DIR ===" >> "$RUNNER_TEMP/layer-test-ninja-rules.log"
+            grep -n "test_vert\|test_frag\|easu\|rcas\|test_shaders\|magpie_shaders" \
+              "$CMAKE_BUILD_DIR/build.ninja" >> "$RUNNER_TEMP/layer-test-ninja-rules.log" 2>/dev/null
+            GREP_EXIT=$?
+            echo "" >> "$RUNNER_TEMP/layer-test-ninja-rules.log"
+            sed -n '1,20p' "$RUNNER_TEMP/layer-test-ninja-rules.log"
+            echo "Grep exit code: $GREP_EXIT (0 = rules found)"
+            echo ""
+          done < <(find layer-test-app/.cxx -type f -name build.ninja -print0 2>/dev/null)
+
+          echo "Total build directories found: $BUILD_DIR_COUNT"
+          if [ "$BUILD_DIR_COUNT" -eq 0 ]; then
+            echo "ERROR: layer-test-app CMake build directories not found"
+            exit 1
+          fi
+
+          # Validate SPIR-V magic in native libraries
+          echo ""
+          echo "=== SPIR-V validation in native libraries ==="
+          for so in libVkLayer_MagpieFSR.so libmagpie_test_renderer.so; do
+            if [ -f "layer-test-app/build/intermediates/cmake/debug/obj/arm64-v8a/$so" ]; then
+              LIBRARY="layer-test-app/build/intermediates/cmake/debug/obj/arm64-v8a/$so"
+              MAGIC_COUNT=$(xxd -p -c 4 "$LIBRARY" | grep -c '^03022307$' || true)
+              echo "  $so: $MAGIC_COUNT SPIR-V magic occurrences"
+            fi
+          done
+
       - name: Verify native library outputs and APK packaging
         id: package-check
         shell: bash
@@ -184,10 +266,10 @@ jobs:
         shell: bash
         run: |
           mkdir -p ci-diagnostics
-          for log in android-magpie-gradle-build.log android-magpie-instrumented-tests.log android-magpie-fsr-reference-configure.log android-magpie-fsr-reference-build.log android-magpie-fsr-reference-test.log; do
+          for log in android-magpie-gradle-build.log android-magpie-instrumented-tests.log android-magpie-fsr-reference-configure.log android-magpie-fsr-reference-build.log android-magpie-fsr-reference-test.log layer-test-ninja-targets.log layer-test-magpie-test-shaders-deps.log layer-test-shader-commands.log layer-test-ninja-rules.log; do
             if [ -f "$RUNNER_TEMP/$log" ]; then cp "$RUNNER_TEMP/$log" ci-diagnostics/; fi
           done
-          for path in app/build/reports app/build/test-results app/build/outputs/logs app/.cxx; do
+          for path in app/build/reports app/build/test-results app/build/outputs/logs app/.cxx layer-test-app/.cxx; do
             if [ -e "$path" ]; then mkdir -p "ci-diagnostics/$(dirname "$path")"; cp -R "$path" "ci-diagnostics/$(dirname "$path")/"; fi
           done
           {
