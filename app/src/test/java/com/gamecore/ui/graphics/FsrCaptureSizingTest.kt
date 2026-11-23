@@ -15,7 +15,8 @@ class FsrCaptureSizingTest {
 
     @Test
     fun rejectsOutputAboveMemoryBudget() {
-        assertNull(FsrCaptureSizing.outputSize(1080, 2400))
+        // 2160 x 5600 = 12,096,000 output pixels, above the 12M-pixel guard.
+        assertNull(FsrCaptureSizing.outputSize(1080, 2800))
     }
 
     @Test
