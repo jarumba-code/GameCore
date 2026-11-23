@@ -75,6 +75,32 @@ struct Renderer {
 
     ~Renderer() { teardown(); }
 
+    static const char* vkResultName(VkResult result) {
+        switch (result) {
+            case VK_SUCCESS: return "VK_SUCCESS";
+            case VK_NOT_READY: return "VK_NOT_READY";
+            case VK_TIMEOUT: return "VK_TIMEOUT";
+            case VK_EVENT_SET: return "VK_EVENT_SET";
+            case VK_EVENT_RESET: return "VK_EVENT_RESET";
+            case VK_INCOMPLETE: return "VK_INCOMPLETE";
+            case VK_ERROR_OUT_OF_HOST_MEMORY: return "VK_ERROR_OUT_OF_HOST_MEMORY";
+            case VK_ERROR_OUT_OF_DEVICE_MEMORY: return "VK_ERROR_OUT_OF_DEVICE_MEMORY";
+            case VK_ERROR_INITIALIZATION_FAILED: return "VK_ERROR_INITIALIZATION_FAILED";
+            case VK_ERROR_DEVICE_LOST: return "VK_ERROR_DEVICE_LOST";
+            case VK_ERROR_MEMORY_MAP_FAILED: return "VK_ERROR_MEMORY_MAP_FAILED";
+            case VK_ERROR_LAYER_NOT_PRESENT: return "VK_ERROR_LAYER_NOT_PRESENT";
+            case VK_ERROR_EXTENSION_NOT_PRESENT: return "VK_ERROR_EXTENSION_NOT_PRESENT";
+            case VK_ERROR_FEATURE_NOT_PRESENT: return "VK_ERROR_FEATURE_NOT_PRESENT";
+            case VK_ERROR_INCOMPATIBLE_DRIVER: return "VK_ERROR_INCOMPATIBLE_DRIVER";
+            case VK_ERROR_TOO_MANY_OBJECTS: return "VK_ERROR_TOO_MANY_OBJECTS";
+            case VK_ERROR_FORMAT_NOT_SUPPORTED: return "VK_ERROR_FORMAT_NOT_SUPPORTED";
+            case VK_ERROR_FRAGMENTED_POOL: return "VK_ERROR_FRAGMENTED_POOL";
+            case VK_ERROR_OUT_OF_POOL_MEMORY: return "VK_ERROR_OUT_OF_POOL_MEMORY";
+            case VK_ERROR_INVALID_SHADER_NV: return "VK_ERROR_INVALID_SHADER_NV";
+            default: return "VK_RESULT_OTHER";
+        }
+    }
+
     static VKAPI_ATTR VkBool32 VKAPI_CALL debugReport(...) { return VK_FALSE; }
 
     bool init(ANativeWindow* win, bool enableLayer) {
@@ -426,7 +452,12 @@ struct Renderer {
         rpci.pAttachments = &color;
         rpci.subpassCount = 1;
         rpci.pSubpasses = &subpass;
-        if (vkCreateRenderPass(device, &rpci, nullptr, &renderPass) != VK_SUCCESS) return false;
+        VkResult result = vkCreateRenderPass(device, &rpci, nullptr, &renderPass);
+        if (result != VK_SUCCESS) {
+            LOGE("vkCreateRenderPass failed: %s (%d), format=%d, substituted=%d",
+                 vkResultName(result), (int)result, (int)format, substituted ? 1 : 0);
+            return false;
+        }
 
         const auto createModule = [&](const uint32_t* code, uint32_t words) {
             VkShaderModuleCreateInfo ci{};
@@ -434,8 +465,10 @@ struct Renderer {
             ci.codeSize = static_cast<size_t>(words) * 4u;
             ci.pCode = code;
             VkShaderModule m = VK_NULL_HANDLE;
-            if (vkCreateShaderModule(device, &ci, nullptr, &m) != VK_SUCCESS) {
-                LOGE("test shader module creation failed — the build must embed test_shaders.h");
+            VkResult result = vkCreateShaderModule(device, &ci, nullptr, &m);
+            if (result != VK_SUCCESS) {
+                LOGE("vkCreateShaderModule failed: %s (%d), codeBytes=%zu",
+                     vkResultName(result), (int)result, ci.codeSize);
             }
             return m;
         };
@@ -449,7 +482,12 @@ VkShaderModule vs = createModule(magpie_test::kVertSpv, magpie_test::kVertSpv_wo
         lci.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
         lci.pushConstantRangeCount = 1;
         lci.pPushConstantRanges = &pcr;
-        if (vkCreatePipelineLayout(device, &lci, nullptr, &pipelineLayout) != VK_SUCCESS) return false;
+        result = vkCreatePipelineLayout(device, &lci, nullptr, &pipelineLayout);
+        if (result != VK_SUCCESS) {
+            LOGE("vkCreatePipelineLayout failed: %s (%d), pushConstantBytes=%u",
+                 vkResultName(result), (int)result, pcr.size);
+            return false;
+        }
 
         VkPipelineShaderStageCreateInfo stages[2]{};
         stages[0].sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
@@ -501,8 +539,11 @@ VkShaderModule vs = createModule(magpie_test::kVertSpv, magpie_test::kVertSpv_wo
         gpi.pDynamicState = &ds;
         gpi.layout = pipelineLayout;
         gpi.renderPass = renderPass;
-        if (vkCreateGraphicsPipelines(device, VK_NULL_HANDLE, 1, &gpi, nullptr, &pipeline) != VK_SUCCESS) {
-            LOGE("graphics pipeline creation failed");
+        result = vkCreateGraphicsPipelines(device, VK_NULL_HANDLE, 1, &gpi, nullptr, &pipeline);
+        if (result != VK_SUCCESS) {
+            LOGE("vkCreateGraphicsPipelines failed: %s (%d), renderPass=%p, layout=%p, extent=%ux%u",
+                 vkResultName(result), (int)result, (void*)renderPass, (void*)pipelineLayout,
+                 extent.width, extent.height);
             return false;
         }
         vkDestroyShaderModule(device, vs, nullptr);
@@ -512,8 +553,10 @@ VkShaderModule vs = createModule(magpie_test::kVertSpv, magpie_test::kVertSpv_wo
         poolInfo.sType = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO;
         poolInfo.flags = VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT;
         poolInfo.queueFamilyIndex = graphicsFamily;
-        if (vkCreateCommandPool(device, &poolInfo, nullptr, &commandPool) != VK_SUCCESS) {
-            LOGE("renderer command pool creation failed");
+        result = vkCreateCommandPool(device, &poolInfo, nullptr, &commandPool);
+        if (result != VK_SUCCESS) {
+            LOGE("vkCreateCommandPool failed: %s (%d), queueFamily=%u",
+                 vkResultName(result), (int)result, graphicsFamily);
             return false;
         }
         commandBuffers.resize(imageCount);
@@ -522,8 +565,10 @@ VkShaderModule vs = createModule(magpie_test::kVertSpv, magpie_test::kVertSpv_wo
         cai.commandPool = commandPool;
         cai.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
         cai.commandBufferCount = imageCount;
-        if (vkAllocateCommandBuffers(device, &cai, commandBuffers.data()) != VK_SUCCESS) {
-            LOGE("renderer command buffer allocation failed");
+        result = vkAllocateCommandBuffers(device, &cai, commandBuffers.data());
+        if (result != VK_SUCCESS) {
+            LOGE("vkAllocateCommandBuffers failed: %s (%d), count=%u",
+                 vkResultName(result), (int)result, imageCount);
             return false;
         }
         framebuffers.resize(imageCount);
@@ -536,19 +581,32 @@ VkShaderModule vs = createModule(magpie_test::kVertSpv, magpie_test::kVertSpv_wo
             fci.width = extent.width;
             fci.height = extent.height;
             fci.layers = 1;
-            if (vkCreateFramebuffer(device, &fci, nullptr, &framebuffers[i]) != VK_SUCCESS) return false;
+            result = vkCreateFramebuffer(device, &fci, nullptr, &framebuffers[i]);
+            if (result != VK_SUCCESS) {
+                LOGE("vkCreateFramebuffer failed: %s (%d), image=%u, extent=%ux%u, format=%d",
+                     vkResultName(result), (int)result, i, extent.width, extent.height, (int)format);
+                return false;
+            }
         }
         sync.resize(2);
         for (auto& s : sync) {
             VkSemaphoreCreateInfo sci{};
             sci.sType = VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO;
-            if (vkCreateSemaphore(device, &sci, nullptr, &s.imageAvailable) != VK_SUCCESS)
+            result = vkCreateSemaphore(device, &sci, nullptr, &s.imageAvailable);
+            if (result != VK_SUCCESS) {
+                LOGE("frame imageAvailable semaphore creation failed: %s (%d)",
+                     vkResultName(result), (int)result);
                 return false;
+            }
             VkFenceCreateInfo fci{};
             fci.sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO;
             fci.flags = VK_FENCE_CREATE_SIGNALED_BIT;
-            if (vkCreateFence(device, &fci, nullptr, &s.inFlight) != VK_SUCCESS)
+            result = vkCreateFence(device, &fci, nullptr, &s.inFlight);
+            if (result != VK_SUCCESS) {
+                LOGE("frame inFlight fence creation failed: %s (%d)",
+                     vkResultName(result), (int)result);
                 return false;
+            }
         }
         return true;
     }
