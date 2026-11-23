@@ -126,4 +126,23 @@ class FsrNativeInstrumentedTest {
             FsrNative.destroyVulkanFsrEngine(handle)
         }
     }
+    @Test
+    fun vulkanFsrEngineRejectsNonExactTwoXOutputDimensions() {
+        val handle = FsrNative.createVulkanFsrEngine(64, 48, 128, 96)
+        if (handle == 0L) return
+        try {
+            val input = Bitmap.createBitmap(64, 48, Bitmap.Config.ARGB_8888)
+            val offByOneOutput = Bitmap.createBitmap(129, 96, Bitmap.Config.ARGB_8888)
+            val result = FsrNative.vulkanFsrProcess(handle, input, offByOneOutput, 0f)
+            assertTrue(
+                result,
+                result.contains("expects output dimensions exactly 2x"),
+            )
+            input.recycle()
+            offByOneOutput.recycle()
+        } finally {
+            FsrNative.destroyVulkanFsrEngine(handle)
+        }
+    }
+
 }
