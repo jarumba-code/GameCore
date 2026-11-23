@@ -96,7 +96,6 @@ struct Renderer {
             case VK_ERROR_FORMAT_NOT_SUPPORTED: return "VK_ERROR_FORMAT_NOT_SUPPORTED";
             case VK_ERROR_FRAGMENTED_POOL: return "VK_ERROR_FRAGMENTED_POOL";
             case VK_ERROR_OUT_OF_POOL_MEMORY: return "VK_ERROR_OUT_OF_POOL_MEMORY";
-            case VK_ERROR_INVALID_SHADER_NV: return "VK_ERROR_INVALID_SHADER_NV";
             default: return "VK_RESULT_OTHER";
         }
     }
@@ -541,9 +540,10 @@ VkShaderModule vs = createModule(magpie_test::kVertSpv, magpie_test::kVertSpv_wo
         gpi.renderPass = renderPass;
         result = vkCreateGraphicsPipelines(device, VK_NULL_HANDLE, 1, &gpi, nullptr, &pipeline);
         if (result != VK_SUCCESS) {
-            LOGE("vkCreateGraphicsPipelines failed: %s (%d), renderPass=%p, layout=%p, extent=%ux%u",
-                 vkResultName(result), (int)result, (void*)renderPass, (void*)pipelineLayout,
-                 extent.width, extent.height);
+            LOGE("vkCreateGraphicsPipelines failed: %s (%d), renderPass=%llu, layout=%llu, extent=%ux%u",
+                 vkResultName(result), (int)result,
+                 static_cast<unsigned long long>(renderPass),
+                 static_cast<unsigned long long>(pipelineLayout), extent.width, extent.height);
             return false;
         }
         vkDestroyShaderModule(device, vs, nullptr);
