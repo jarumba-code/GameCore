@@ -16,32 +16,24 @@ import kotlinx.coroutines.withContext
 import javax.inject.Inject
 
 /**
- * State for one capture-and-sharpen experiment run. [captured] and [processed] are the pre/post
- * frames of the displayed capture; [statusLine] carries the honest narration of what happened,
- * including the latency measurement.
+ * State for one capture-and-upscale experiment run. [captured] is the composited screen capture;
+ * [processed] is its 2x EASU+RCAS output. [statusLine] reports what actually happened.
  */
 data class CaptureExperimentUiState(
     val busy: Boolean = false,
     val captured: Bitmap? = null,
     val processed: Bitmap? = null,
-    val statusLine: String = "Not run. The processed frame is the displayed capture — not a " +
-        "game's render target and not renderer-integrated FSR.",
+    val statusLine: String = "Not run. This experiment processes a post-composition screen capture; " +
+        "it does not change a game's render resolution or recover lost detail.",
 )
 
 /**
- * The capture-and-process experiment — option D of the frame-access decision
- * (docs/ANDROID_MAGPIE_FRAME_ACCESS_DECISION.md), kept deliberately separate from
- * renderer-integrated FSR.
+ * Experimental post-composition capture processing.
  *
- * What a run does: captures the **displayed** screen through the existing consented
- * MediaProjection path ([ScreenCaptureController.captureFrameToMemory]), feeds that frame through
- * the app-owned Vulkan engine at its captured size, and measures the wall-clock cost of the whole
- * step. What it does not do, and says so in plain words: the captured frame is the compositor's
- * post-enlargement image. A downscaled game's pre-enlargement detail was already discarded by the
- * platform's hardware scaler before capture; EASU here runs at 1:1 (there is nothing to upsample)
- * and only RCAS sharpening contributes. This is a latency-and-feasibility experiment on the
- * displayed capture — never a claim of renderer-integrated FSR, never a claim of recovered
- * resolution, and it leaves the game's rendering untouched.
+ * MediaProjection supplies the already-composited display image, not another app's render target.
+ * This experiment therefore demonstrates a 2x spatial upscale of that captured image only. It
+ * cannot reduce the game's GPU workload, access the game's pre-composition buffers, or restore
+ * detail already discarded by Android's compositor/display scaler.
  */
 @HiltViewModel
 class CaptureExperimentViewModel @Inject constructor(
@@ -51,7 +43,7 @@ class CaptureExperimentViewModel @Inject constructor(
     private val state = MutableStateFlow(CaptureExperimentUiState())
     val uiState: StateFlow<CaptureExperimentUiState> = state.asStateFlow()
 
-    /** The native FSR engine, created lazily at the captured frame's size, reused across runs. */
+    /** Persistent native engine, reused while the captured input dimensions remain unchanged. */
     private var engineHandle = 0L
     private var engineSize: Pair<Int, Int> = 0 to 0
 
@@ -64,7 +56,14 @@ class CaptureExperimentViewModel @Inject constructor(
                     RunResult("Capture experiment failed: ${it.message}", null, null)
                 }
             }
-            state.update { it.copy(busy = false, statusLine = outcome.statusLine, captured = outcome.captured, processed = outcome.processed) }
+            state.update {
+                it.copy(
+                    busy = false,
+                    statusLine = outcome.statusLine,
+                    captured = outcome.captured,
+                    processed = outcome.processed,
+                )
+            }
         }
     }
 
@@ -75,41 +74,78 @@ class CaptureExperimentViewModel @Inject constructor(
     )
 
     private suspend fun captureAndProcess(): RunResult {
-        val started = System.currentTimeMillis()
+        val started = System.nanoTime()
         return when (val outcome = capture.captureFrameToMemory()) {
             CaptureOutcome.Extracted -> {
                 val frame = capture.lastExtractedFrame.value
                     ?: return RunResult("Capture completed but produced no frame.", null, null)
-                val width = frame.width
-                val height = frame.height
+
+                val inputWidth = frame.width
+                val inputHeight = frame.height
+                val outputSize = FsrCaptureSizing.outputSize(inputWidth, inputHeight)
+                    ?: return RunResult(
+                        "Captured ${inputWidth}x${inputHeight}, but its 2x output exceeds the " +
+                            "safe bitmap budget (${FsrCaptureSizing.MAX_OUTPUT_PIXELS} pixels). " +
+                            "No processing was attempted.",
+                        frame,
+                        null,
+                    )
+
                 var handle = engineHandle
-                if (handle == 0L || engineSize != width to height) {
-                    if (handle != 0L) FsrNative.destroyVulkanFsrEngine(handle)
-                    handle = FsrNative.createVulkanFsrEngine(width, height, width, height)
+                if (handle == 0L || engineSize != (inputWidth to inputHeight)) {
+                    if (handle != 0L) {
+                        FsrNative.destroyVulkanFsrEngine(handle)
+                        engineHandle = 0L
+                    }
+                    handle = FsrNative.createVulkanFsrEngine(
+                        inputWidth,
+                        inputHeight,
+                        outputSize.width,
+                        outputSize.height,
+                    )
                     engineHandle = handle
-                    engineSize = width to height
+                    engineSize = if (handle != 0L) inputWidth to inputHeight else 0 to 0
                 }
+
                 if (handle == 0L) {
                     return RunResult(
-                        "The Vulkan engine could not host this frame size (${width}x${height}); " +
-                            "no processing was attempted and none is claimed.",
+                        "The Vulkan FSR engine could not create resources for " +
+                            "${inputWidth}x${inputHeight} → ${outputSize.width}x${outputSize.height}. " +
+                            "No processing is claimed.",
                         frame,
                         null,
                     )
                 }
-                val processed = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
-                val processResult = FsrNative.vulkanFsrProcess(handle, frame, processed, 1f)
-                val totalMs = System.currentTimeMillis() - started
-                RunResult(
-                    "Captured ${width}x${height} (the displayed image, post-composition); " +
-                        "capture+process wall time ${totalMs}ms; $processResult",
-                    frame,
-                    processed,
+
+                val processed = Bitmap.createBitmap(
+                    outputSize.width,
+                    outputSize.height,
+                    Bitmap.Config.ARGB_8888,
                 )
+                val processResult = FsrNative.vulkanFsrProcess(handle, frame, processed, 1f)
+                val elapsedMs = (System.nanoTime() - started) / 1_000_000.0
+                if (!processResult.startsWith("Vulkan EASU+RCAS dispatched;")) {
+                    processed.recycle()
+                    RunResult(
+                        "Captured ${inputWidth}x${inputHeight}; Vulkan processing failed after " +
+                            "${"%.1f".format(java.util.Locale.US, elapsedMs)}ms: $processResult",
+                        frame,
+                        null,
+                    )
+                } else {
+                    RunResult(
+                        "Post-composition capture ${inputWidth}x${inputHeight} → " +
+                            "${outputSize.width}x${outputSize.height} (2x EASU+RCAS). " +
+                            "Capture+process wall time " +
+                            "${"%.1f".format(java.util.Locale.US, elapsedMs)}ms. " +
+                            "Visual post-processing only; game rendering is unchanged. $processResult",
+                        frame,
+                        processed,
+                    )
+                }
             }
             CaptureOutcome.NeedsConsent -> RunResult(
-                "Screen-capture consent is needed first — grant it from the capture feature that " +
-                    "owns the projection. Nothing was captured.",
+                "Screen-capture consent is needed first. Nothing was captured.",
                 null,
                 null,
             )
