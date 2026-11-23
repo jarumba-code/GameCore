@@ -540,10 +540,9 @@ VkShaderModule vs = createModule(magpie_test::kVertSpv, magpie_test::kVertSpv_wo
         gpi.renderPass = renderPass;
         result = vkCreateGraphicsPipelines(device, VK_NULL_HANDLE, 1, &gpi, nullptr, &pipeline);
         if (result != VK_SUCCESS) {
-            LOGE("vkCreateGraphicsPipelines failed: %s (%d), renderPass=%llu, layout=%llu, extent=%ux%u",
-                 vkResultName(result), (int)result,
-                 static_cast<unsigned long long>(renderPass),
-                 static_cast<unsigned long long>(pipelineLayout), extent.width, extent.height);
+            LOGE("vkCreateGraphicsPipelines failed: %s (%d), format=%d, extent=%ux%u, substituted=%d",
+                 vkResultName(result), (int)result, (int)format,
+                 extent.width, extent.height, substituted ? 1 : 0);
             return false;
         }
         vkDestroyShaderModule(device, vs, nullptr);
