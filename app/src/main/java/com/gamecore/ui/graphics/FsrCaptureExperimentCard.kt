@@ -19,17 +19,8 @@ import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 
 /**
- * The capture-and-sharpen experiment card — the UI of the frame-access decision's option D
- * (docs/ANDROID_MAGPIE_FRAME_ACCESS_DECISION.md).
- *
- * What this card does: captures the **displayed** screen through the existing consented
- * MediaProjection path, runs that frame through the app-owned Vulkan engine at its captured size,
- * and measures how long the capture-plus-process step took. What it does not do, and says so in
- * plain words on the card: the captured frame is the compositor's post-enlargement image. A
- * downscaled game's pre-enlargement detail is already discarded by the platform's hardware scaler
- * before capture, EASU here runs at 1:1 (there is nothing to upsample), and only RCAS sharpening
- * contributes. This is a latency-and-feasibility experiment on the displayed capture — never a
- * claim of renderer-integrated FSR and never a claim of recovered resolution.
+ * A clearly separated experiment: upscale the consented, already-composited display capture.
+ * This is not access to a game's render target and cannot reduce the game's rendering workload.
  */
 @Composable
 internal fun FsrCaptureExperimentCard(modifier: Modifier = Modifier) {
@@ -38,25 +29,26 @@ internal fun FsrCaptureExperimentCard(modifier: Modifier = Modifier) {
 
     androidx.compose.material3.Card(modifier = modifier.fillMaxWidth()) {
         Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            Text("Capture & sharpen (experimental)", style = MaterialTheme.typography.titleMedium)
+            Text("Capture & 2x upscale (experimental)", style = MaterialTheme.typography.titleMedium)
             Text(
-                "Processes the displayed capture — the image after Android's compositor has " +
-                    "already enlarged it. It cannot restore detail that was discarded, and the " +
-                    "game's own rendering is untouched.",
+                "Captures the displayed screen after Android's compositor, then runs 2x Vulkan " +
+                    "EASU+RCAS. This is visual post-processing only: it cannot access the game's " +
+                    "original render buffer, restore detail already lost, or reduce the game's GPU load. " +
+                    "The 2x output is memory-limited on purpose.",
                 style = MaterialTheme.typography.bodySmall,
                 fontSize = 13.sp,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
             Button(enabled = !state.busy, onClick = viewModel::run) {
-                Text(if (state.busy) "Capturing…" else "Capture & sharpen one frame")
+                Text(if (state.busy) "Capturing…" else "Capture & upscale one frame")
             }
             Text(state.statusLine, style = MaterialTheme.typography.bodySmall)
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 state.captured?.let {
-                    Image(it.asImageBitmap(), "Captured frame", Modifier.weight(1f).height(110.dp))
+                    Image(it.asImageBitmap(), "Composited screen capture", Modifier.weight(1f).height(110.dp))
                 }
                 state.processed?.let {
-                    Image(it.asImageBitmap(), "RCAS-sharpened capture", Modifier.weight(1f).height(110.dp))
+                    Image(it.asImageBitmap(), "Two-times EASU and RCAS output", Modifier.weight(1f).height(110.dp))
                 }
             }
         }
