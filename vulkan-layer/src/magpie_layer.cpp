@@ -552,7 +552,20 @@ magpie_CreateDevice(VkPhysicalDevice physical, const VkDeviceCreateInfo* pCreate
     }
     const auto createDevice =
         reinterpret_cast<PFN_vkCreateDevice>(gpiA_next(instance, "vkCreateDevice"));
-    if (!createDevice) return VK_ERROR_INITIALIZATION_FAILED;
+    if (!createDevice) {
+        LOGE("DIAGNOSTIC: vkCreateDevice function pointer is null");
+        return VK_ERROR_INITIALIZATION_FAILED;
+    }
+
+    LOGI("DIAGNOSTIC: vkCreateDevice called for physical device %p",
+         reinterpret_cast<void*>(physical));
+    LOGI("DIAGNOSTIC: pCreateInfo->enabledExtensionCount = %u", pCreateInfo->enabledExtensionCount);
+    LOGI("DIAGNOSTIC: forwarding extensions:");
+    for (uint32_t i = 0; i < pCreateInfo->enabledExtensionCount; ++i) {
+        const char* extName = pCreateInfo->ppEnabledExtensionNames[i];
+        bool isMagpieControl = std::strcmp(extName, MAGPIE_CONTROL_EXTENSION_NAME) == 0;
+        LOGI("    [%u] %s %s", i, extName, isMagpieControl ? "(MAGPIE_CONTROL - filtered)" : "");
+    }
 
     bool controlExtensionEnabled = false;
     std::vector<const char*> forwardedExtensions;
@@ -565,14 +578,31 @@ magpie_CreateDevice(VkPhysicalDevice physical, const VkDeviceCreateInfo* pCreate
             forwardedExtensions.push_back(extensionName);
         }
     }
+    LOGI("DIAGNOSTIC: VK_MAGPIE_layer_control advertised = %s", controlExtensionEnabled ? "true" : "false");
+    LOGI("DIAGNOSTIC: Forwarding %u extensions to driver", (unsigned int)forwardedExtensions.size());
+
     VkDeviceCreateInfo forwardedCreateInfo = *pCreateInfo;
     forwardedCreateInfo.enabledExtensionCount =
         static_cast<uint32_t>(forwardedExtensions.size());
     forwardedCreateInfo.ppEnabledExtensionNames =
         forwardedExtensions.empty() ? nullptr : forwardedExtensions.data();
+
+    // Log enabled features if present
+    if (pCreateInfo->pEnabledFeatures) {
+        LOGI("DIAGNOSTIC: Features: shaderStorageImageExtendedFormats=%d, shaderStorageImageReadWithoutFormat=%d, shaderStorageImageWriteWithoutFormat=%d",
+             pCreateInfo->pEnabledFeatures->shaderStorageImageExtendedFormats,
+             pCreateInfo->pEnabledFeatures->shaderStorageImageReadWithoutFormat,
+             pCreateInfo->pEnabledFeatures->shaderStorageImageWriteWithoutFormat);
+    }
+
     const VkResult result =
         createDevice(physical, &forwardedCreateInfo, pAllocator, pDevice);
-    if (result != VK_SUCCESS) return result;
+    LOGI("DIAGNOSTIC: downstream vkCreateDevice = %d (%s)", (int)result,
+         result == VK_SUCCESS ? "SUCCESS" : (result == VK_ERROR_INITIALIZATION_FAILED ? "INITIALIZATION_FAILED" : "other"));
+    if (result != VK_SUCCESS) {
+        LOGE("DIAGNOSTIC: vkCreateDevice failed before layer device initialization, error %d", (int)result);
+        return result;
+    }
 
     auto* data = new DeviceData();
     data->gdpA_next = gdpA_next;

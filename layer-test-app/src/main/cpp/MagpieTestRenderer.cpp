@@ -428,28 +428,55 @@ struct Renderer {
         rpci.pSubpasses = &subpass;
         if (vkCreateRenderPass(device, &rpci, nullptr, &renderPass) != VK_SUCCESS) return false;
 
-        const auto createModule = [&](const uint32_t* code, uint32_t words) {
+        // DIAGNOSTIC LOGGING FOR CONFIG A
+        // Log embedded shader array sizes and check SPIR-V magic
+        LOGI("DIAGNOSTIC: kVertSpv_word_count = %u (bytes = %u)",
+             magpie_test::kVertSpv_word_count, magpie_test::kVertSpv_word_count * 4u);
+        LOGI("DIAGNOSTIC: kFragSpv_word_count = %u (bytes = %u)",
+             magpie_test::kFragSpv_word_count, magpie_test::kFragSpv_word_count * 4u);
+        // SPIR-V magic: 0x07230203 stored as little-endian bytes 03 02 23 07
+        static const uint32_t SPIR_V_MAGIC = 0x07230203;
+        if (magpie_test::kVertSpv_word_count > 0) {
+            LOGI("DIAGNOSTIC: kVertSpv[0] = 0x%08x (magic %s)",
+                 magpie_test::kVertSpv[0],
+                 magpie_test::kVertSpv[0] == SPIR_V_MAGIC ? "VALID" : "INVALID");
+        }
+        if (magpie_test::kFragSpv_word_count > 0) {
+            LOGI("DIAGNOSTIC: kFragSpv[0] = 0x%08x (magic %s)",
+                 magpie_test::kFragSpv[0],
+                 magpie_test::kFragSpv[0] == SPIR_V_MAGIC ? "VALID" : "INVALID");
+        }
+
+        const auto createModule = [&](const uint32_t* code, uint32_t words, const char* name) {
             VkShaderModuleCreateInfo ci{};
             ci.sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
             ci.codeSize = static_cast<size_t>(words) * 4u;
             ci.pCode = code;
             VkShaderModule m = VK_NULL_HANDLE;
-            if (vkCreateShaderModule(device, &ci, nullptr, &m) != VK_SUCCESS) {
-                LOGE("test shader module creation failed — the build must embed test_shaders.h");
-            }
+            VkResult r = vkCreateShaderModule(device, &ci, nullptr, &m);
+            LOGI("DIAGNOSTIC: vkCreateShaderModule(%s) = %d (%s), handle = 0x%llx",
+                 name, (int)r, r == VK_SUCCESS ? "SUCCESS" : "FAILED",
+                 (unsigned long long)(m ? m : 0));
             return m;
         };
         // The test renderer's own shaders, embedded by its CMake (test_shaders.h).
-VkShaderModule vs = createModule(magpie_test::kVertSpv, magpie_test::kVertSpv_word_count);
-        VkShaderModule fs = createModule(magpie_test::kFragSpv, magpie_test::kFragSpv_word_count);
-        if (vs == VK_NULL_HANDLE || fs == VK_NULL_HANDLE) return false;
+VkShaderModule vs = createModule(magpie_test::kVertSpv, magpie_test::kVertSpv_word_count, "vertex");
+        VkShaderModule fs = createModule(magpie_test::kFragSpv, magpie_test::kFragSpv_word_count, "fragment");
+        if (vs == VK_NULL_HANDLE || fs == VK_NULL_HANDLE) {
+            LOGE("DIAGNOSTIC: One or more shader modules are VK_NULL_HANDLE, aborting pipeline creation");
+            return false;
+        }
 
         VkPushConstantRange pcr{VK_SHADER_STAGE_FRAGMENT_BIT, 0, 4};
         VkPipelineLayoutCreateInfo lci{};
         lci.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
         lci.pushConstantRangeCount = 1;
         lci.pPushConstantRanges = &pcr;
-        if (vkCreatePipelineLayout(device, &lci, nullptr, &pipelineLayout) != VK_SUCCESS) return false;
+        VkResult layoutResult = vkCreatePipelineLayout(device, &lci, nullptr, &pipelineLayout);
+        LOGI("DIAGNOSTIC: vkCreatePipelineLayout = %d (%s), layout = 0x%llx",
+             (int)layoutResult, layoutResult == VK_SUCCESS ? "SUCCESS" : "FAILED",
+             (unsigned long long)(pipelineLayout ? pipelineLayout : 0));
+        if (layoutResult != VK_SUCCESS) return false;
 
         VkPipelineShaderStageCreateInfo stages[2]{};
         stages[0].sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
@@ -497,12 +524,24 @@ VkShaderModule vs = createModule(magpie_test::kVertSpv, magpie_test::kVertSpv_wo
         gpi.pViewportState = &vp;
         gpi.pRasterizationState = &rs;
         gpi.pMultisampleState = &ms;
-        gpi.pColorBlendState = &cb;
-        gpi.pDynamicState = &ds;
-        gpi.layout = pipelineLayout;
-        gpi.renderPass = renderPass;
-        if (vkCreateGraphicsPipelines(device, VK_NULL_HANDLE, 1, &gpi, nullptr, &pipeline) != VK_SUCCESS) {
-            LOGE("graphics pipeline creation failed");
+gpi.pColorBlendState = &cb;
+gpi.pDynamicState = &ds;
+gpi.layout = pipelineLayout;
+gpi.renderPass = renderPass;
+        // DIAGNOSTIC LOGGING FOR CONFIG A
+        LOGI("DIAGNOSTIC: vkCreateGraphicsPipelines inputs:");
+        LOGI("  shaderStages: vertex module=0x%llx fragment module=0x%llx",
+             (unsigned long long)(stages[0].module), (unsigned long long)(stages[1].module));
+        LOGI("  renderPass=0x%llx format=%d extent=%ux%u",
+             (unsigned long long)renderPass, (int)format, extent.width, extent.height);
+        LOGI("  pipelineLayout=0x%llx pushConstantOffset=0 pushConstantCount=1",
+             (unsigned long long)pipelineLayout);
+        VkResult pipelineResult = vkCreateGraphicsPipelines(device, VK_NULL_HANDLE, 1, &gpi, nullptr, &pipeline);
+        LOGI("DIAGNOSTIC: vkCreateGraphicsPipelines = %d (%s), pipeline = 0x%llx",
+             (int)pipelineResult, pipelineResult == VK_SUCCESS ? "SUCCESS" : "FAILED",
+             (unsigned long long)(pipeline ? pipeline : 0));
+        if (pipelineResult != VK_SUCCESS) {
+            LOGE("graphics pipeline creation failed with VkResult=%d", (int)pipelineResult);
             return false;
         }
         vkDestroyShaderModule(device, vs, nullptr);
