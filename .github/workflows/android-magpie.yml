@@ -2,9 +2,9 @@ name: Android Magpie Android build
 
 on:
   push:
-    branches: [feature/android-magpie]
+    branches: [feature/android-magpie, diagnostic/vulkan-failure-investigation]
   pull_request:
-    branches: [feature/android-magpie]
+    branches: [feature/android-magpie, diagnostic/vulkan-failure-investigation]
   workflow_dispatch:
 
 permissions:
@@ -60,8 +60,9 @@ jobs:
           # the same GLSL to the same Vulkan 1.0 SPIR-V; the shaders declare the include
           # directive extension it requires, and the CMake build prefers glslc when one exists.
           sudo apt-get update -qq
-          sudo apt-get install -y -qq glslang-tools
+          sudo apt-get install -y -qq glslang-tools spirv-tools
           glslangValidator --version | head -2
+          spirv-val --version | head -1
 
       - name: Set up Gradle and dependency cache
         uses: gradle/actions/setup-gradle@v6
@@ -176,8 +177,53 @@ jobs:
               LIBRARY="layer-test-app/build/intermediates/cmake/debug/obj/arm64-v8a/$so"
               MAGIC_COUNT=$(xxd -p -c 4 "$LIBRARY" | grep -c '^03022307$' || true)
               echo "  $so: $MAGIC_COUNT SPIR-V magic occurrences"
+              if [ "$MAGIC_COUNT" -eq 0 ] && [[ "$so" == *"layer"* ]]; then
+                echo "  WARNING: No shader data in layer library - this indicates missing shader embedding!"
+              fi
             fi
           done
+
+          # Run spirv-val on generated shaders
+          echo ""
+          echo "=== SPIR-V validation with spirv-val ==="
+          SHADER_DIR_GLOB=$(find layer-test-app/.cxx -name "shaders" -type d -print -quit 2>/dev/null || echo "")
+          if [ -n "$SHADER_DIR_GLOB" ]; then
+            for spv in test_vert.spv test_frag.spv easu.spv rcas.spv; do
+              FOUND=$(find . -path "$SHADER_DIR_GLOB" -name "$spv" -type f -print -quit 2>/dev/null)
+              if [ -n "$FOUND" ]; then
+                echo "Validating $spv:"
+                spirv-val "$FOUND" || echo "SPIR-V validation FAILED for $spv"
+              else
+                echo "WARNING: $spv not found for validation"
+              fi
+            done
+          else
+            echo "WARNING: Shader directory not found for spirv-val"
+          fi
+
+          # Check layer-test APK exists
+          if [ -f "layer-test-app/build/outputs/apk/debug/layer-test-app-debug.apk" ]; then
+            echo ""
+            echo "=== Extracting native libraries from APK for deeper inspection ==="
+            mkdir -p apk-extracted
+            cd apk-extracted
+            unzip -o ../layer-test-app/build/outputs/apk/debug/layer-test-app-debug.apk \
+              lib/arm64-v8a/libVkLayer_MagpieFSR.so lib/arm64-v8a/libmagpie_test_renderer.so 2>/dev/null
+
+            for so in libVkLayer_MagpieFSR.so libmagpie_test_renderer.so; do
+              if [ -f "$so" ]; then
+                MAGIC=$(xxd -p -c 4 "$so" | grep -c '^03022307$' || true)
+                echo "  $so from APK: $MAGIC SPIR-V magic bytes"
+
+                if [ "$MAGIC" -eq 0 ]; then
+                  echo "  ERROR: $so has no embedded shader data!"
+                  echo "  Checking for shader symbols:"
+                  nm -C "$so" 2>/dev/null | grep -E "kEasuSpv|kRcasSpv|kVertSpv|kFragSpv" || echo "    No shader symbols found"
+                fi
+              fi
+            done
+            cd ..
+          fi
 
       - name: Verify native library outputs and APK packaging
         id: package-check
