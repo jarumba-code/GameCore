@@ -1,11 +1,14 @@
 package com.gamecore.domain.gaming
 
 import android.os.SystemClock
+import com.gamecore.core.diagnostics.GameCrashRecorder
+import com.gamecore.core.plugin.PluginSetApplier
 import com.gamecore.core.model.ChangeOrigin
 import com.gamecore.core.model.ColorPreset
 import com.gamecore.core.model.GameProfile
 import com.gamecore.core.model.MemoryReclaimReport
 import com.gamecore.core.model.OptimizationAction
+import com.gamecore.core.model.OptimizationResult
 import com.gamecore.core.model.ProfileApplication
 import com.gamecore.core.model.ResolutionScale
 import com.gamecore.core.model.RestoreReport
@@ -161,6 +164,8 @@ class GamingCoordinator @Inject constructor(
     private val networkEvents: NetworkEventRecorder,
     private val capture: ScreenCaptureController,
     private val intelligence: AutomaticIntelligenceAnalyzer,
+    private val gameCrashRecorder: GameCrashRecorder,
+    private val pluginSets: PluginSetApplier,
 ) {
 
     private val state = MutableStateFlow(GamingState.IDLE)
@@ -217,6 +222,12 @@ class GamingCoordinator @Inject constructor(
      */
     suspend fun run(): Unit = coroutineScope {
         val scope = this
+
+        // A previous process can have died between enabling a game's set and restoring it. Clearing
+        // that before detection is what keeps a crash from leaving a set's plugins on indefinitely;
+        // the game, if still running, is announced below and its set is applied again.
+        runCatching { pluginSets.restoreLeftovers() }
+
         detector.events().collect { event ->
             when (event) {
                 is GameEvent.Started -> onStarted(event, scope)
@@ -316,6 +327,16 @@ class GamingCoordinator @Inject constructor(
             startedAtMillis = event.atMillis,
         )
 
+        // The session boundary is recorded before the profile work, so a crash during apply still has
+        // an opening line in the history. It cannot fail the launch: the log is evidence about the
+        // game, not a prerequisite for running it.
+        runCatching { gameCrashRecorder.onGameStarted(event.packageName, label, event.atMillis) }
+
+        // A bound set is a convenience, not a launch prerequisite. It only switches on plugins whose
+        // permissions are already granted and never touches a suspended or quarantined one; a refusal
+        // is recorded in the log and the game still starts.
+        runCatching { pluginSets.applyForGame(event.packageName) }
+
         // Before the profile, not after. Applying it is a second or two of shell round trips, and the
         // overlay is the only visible sign that GameCore noticed the game at all — a button that arrives
         // once the loading screen is over reads as a coincidence rather than as a feature.
@@ -342,11 +363,15 @@ class GamingCoordinator @Inject constructor(
             startRecording(
                 event = event,
                 label = label,
-                // Confirmed changes only. An unverified write — the MediaTek refresh-rate case — is
-                // not counted as applied anywhere else in the app, and a session row claiming the
-                // device was optimized when GameCore could not read the change back would be exactly
-                // the invented statistic §24 forbids.
-                applied = (application?.appliedCount ?: 0) > 0,
+                // Confirmed changes, plus the one unverified shape that is not a failure: a Game Mode
+                // request the platform accepted and GameCore has no way to read back. A write that
+                // could not be confirmed when confirmation was possible — the MediaTek refresh-rate
+                // case — still does not count, because a session row claiming the device was
+                // optimized when GameCore could not verify it would be the invented statistic §24
+                // forbids. The two are kept apart by `readbackUnavailable`.
+                applied = application?.results?.any {
+                    it.isApplied || (it is OptimizationResult.Unverified && it.readbackUnavailable)
+                } == true,
                 application = application,
                 colour = appliedColour(profile, application),
                 resolution = appliedResolution(profile, application),
@@ -448,10 +473,13 @@ class GamingCoordinator @Inject constructor(
     /**
      * The resolution scale this session actually put the display on, or null if it did not.
      *
-     * The same rule as [appliedColour], for the same reason: only a confirmed change is recorded, so a
-     * device that accepted the `wm size` write and stayed where it was — [DisplaySizeOutcome.NotHonoured],
-     * which is most built-in screens on some builds — leaves the session saying the resolution was not
-     * overridden rather than naming a scale nothing read back.
+     * The same rule as [appliedColour], with one deliberate exception. A `wm size` write that was
+     * accepted and did not take — [DisplaySizeOutcome.NotHonoured], which is most built-in screens on
+     * some builds — leaves the session saying the resolution was not overridden rather than naming a
+     * scale nothing read back. A Game Mode request is different: that transport has no read-back at
+     * all, its result is [OptimizationResult.Unverified] with `readbackUnavailable`, and the per-game
+     * override is exactly what Android applies on the game's next launch. Recording it is recording
+     * the request the platform accepted, not a confirmation GameCore invented.
      *
      * Read from the profile and not from the display, because the display cannot answer it. By the time
      * this runs the panel holds a *size*, and nothing on the device records whether that size came from a
@@ -465,7 +493,8 @@ class GamingCoordinator @Inject constructor(
     ): ResolutionScale? {
         val scale = profile.resolutionOverride ?: return null
         val applied = application?.results?.any {
-            it.action == OptimizationAction.SET_DISPLAY_SIZE && it.isApplied
+            it.action == OptimizationAction.SET_DISPLAY_SIZE &&
+                (it.isApplied || (it is OptimizationResult.Unverified && it.readbackUnavailable))
         } == true
         return if (applied) scale else null
     }
@@ -638,6 +667,25 @@ class GamingCoordinator @Inject constructor(
 
         monitor.watch(null)
         recorder.end(event.reason, event.atMillis)
+
+        // The set's switches go back before the crash read, which can take a second on a device with
+        // shell access. A failure to restore is contained: the same ids are persisted and the next
+        // detection start clears them.
+        runCatching { pluginSets.restore() }
+
+        // Best-effort and bounded: reading the crash buffer needs shell access and can take a second.
+        // A failure here must not keep the device in the profile's settings, so the restore below
+        // still runs whatever this returns.
+        runCatching {
+            gameCrashRecorder.onGameStopped(
+                packageName = event.packageName,
+                label = state.value.gameLabel,
+                startedAtMillis = state.value.startedAtMillis,
+                endedAtMillis = event.atMillis,
+                reason = event.reason.name,
+            )
+        }
+
         val restore = applier.restore()
         monitor.clearHistory()
         state.value = GamingState(lastRestore = restore)
